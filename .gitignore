@@ -1,0 +1,64 @@
+# ===========================================================================
+# WebSR · Git 忽略规则
+#
+# 目录边界（见 docs/rules/project-rules.md §2.1）：
+#   data/       = 应用数据根   → models/ 随仓库提供；其余均为运行期产物，不跟踪
+#   .workbuddy/ = 工具链数据   → 本项目按用户决定入库（项目记忆 + 基准证据）
+#   .venvs/     = 隔离推理环境 → 约 4 GB，严禁入库
+# ===========================================================================
+
+# ---- 隔离的 Python 推理环境（严禁全局安装，严禁入库）----
+.venvs/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ---- Node / 前端 ----
+node_modules/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- 应用运行期数据（data/ 下除 models/ 外均由运行时创建）----
+data/app.db
+data/app.db-shm
+data/app.db-wal
+data/uploads
+data/outputs
+data/thumbs
+data/calibration
+
+# ---- 环境变量：生产凭证绝不入库（安全红线）----
+#   .env.example（示例）/ .env.dev（开发）可入库
+#   .env.prd（生产）必须只留在本机
+.env.prd
+.env.local
+*.env.prd
+
+# ---- 日志与临时文件 ----
+*.log
+*.tmp
+*.swp
+*~
+~$*
+
+# ---- 操作系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
