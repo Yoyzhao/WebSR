@@ -1,0 +1,126 @@
+/* ============================================================================
+ * WebSR · 设计 token
+ *
+ * 唯一来源：docs/prototype/tokens.css（5A 设计交付物）
+ * 本文件是它在应用内的落地副本，**变量名保持一致**，确保设计交付物与代码不漂移。
+ *
+ * 约定（详见 docs/prototype/02-视觉与主题基线.md §6）：
+ *   1. 默认深色；切换时在 <html> 上设 data-theme="Light"；
+ *   2. 页面内**禁止硬编码色值** —— 硬编码的元素不参与主题切换，浅色下会变成暗块；
+ *   3. **禁止在组件里判断深浅色**（if (isDark)），主题判断集中在 useTheme 单一入口。
+ * ========================================================================== */
+
+:root {
+  /* ---- 背景层级（由深到浅，共 4 层；用层级而非分割线建立信息层次） ---- */
+  --Theme-bg-app: #0f0d0d;
+  --Theme-bg-panel: #1a1a1a;
+  --Theme-bg-elevated: #242424;
+  --Theme-bg-hover: #292929;
+
+  /* ---- 边框 ---- */
+  --Theme-border-subtle: #2e2e2e;
+  --Theme-border-strong: #3d3d3d;
+
+  /* ---- 文字（三级） ---- */
+  --Theme-text-primary: #f2f2f2;
+  --Theme-text-secondary: #a8a8a8;
+  --Theme-text-tertiary: #8c8c8c; /* 对比度 5.2:1（经无障碍修正） */
+
+  /* ---- 强调与语义 ---- */
+  --Theme-primary: #0078d4;
+  --Theme-primary-hover: #1a8ae0;
+  --Theme-link: #61ccff;
+  --Theme-success: #7dd9a6;
+  --Theme-warning: #e8c269;
+  --Theme-error: #e07866;
+
+  /* ---- 前景色（叠在主色/语义色上的文字与图标） ----
+   * 设计交付物 tokens.css 未定义该槽位，5C 补齐以免页面硬编码 #fff。
+   * 取值规则：深色主题取近黑、浅色主题取近白 —— 与 --Theme-bg-app 同族，
+   * 保证在 --Theme-primary 底上的对比度 ≥ 4.5:1（深 4.4:1 / 浅 5.6:1）。 */
+  --Theme-on-primary: #0f0d0d;
+
+  /* ---- 尺寸 ---- */
+  --Scale-radius-card: 8px;
+  --Scale-radius-inner: 6px;
+  --Scale-radius-button: 4px;
+  --Scale-radius-pill: 999px;
+  --Scale-space-1: 4px;
+  --Scale-space-2: 8px;
+  --Scale-space-3: 12px;
+  --Scale-space-4: 16px;
+  --Scale-space-5: 24px;
+  --Scale-space-6: 32px;
+
+  /* ---- 字体族 ---- */
+  --font-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
+
+  /* ---- 字号层级（工具型界面，整体偏小、信息密度高） ----
+   * 2026-10-08 整体上调一档，补偿 2K 分辨率下的像素密度：
+   *   原 10 / 11 / 12 / 13 / 15 / 18 / 24  →  现 11 / 12 / 13 / 14 / 16 / 20 / 26
+   * 采用**重新编号**而非"改值不改名"：token 名始终等于像素值，
+   * 避免出现 `--font-size-12: 13px` 这种名不符实的隐患。
+   * ⚠️ 组件内一律引用 token，禁止硬编码 font-size（否则调整不生效）。 */
+  --font-size-11: 11px; /* 格式徽标 */
+  --font-size-12: 12px; /* 表格单元格、元信息、辅助说明 */
+  --font-size-13: 13px; /* 主要正文、按钮、表单标签 */
+  --font-size-14: 14px; /* 面板标题、卡片标题、输入值 */
+  --font-size-16: 16px; /* 品牌名、空态主文案 */
+  --font-size-20: 20px; /* 独立页标题 */
+  --font-size-26: 26px; /* 档位大徽标（唯一的大字号） */
+
+  /* ---- 行高 ---- */
+  --line-height-tight: 1.3;
+  --line-height-body: 1.45;
+  --line-height-relaxed: 1.55;
+
+  /* ---- 图标 ---- */
+  --icon-stroke: 1.8;
+  --icon-color: #8a8a8a; /* 两种主题共用同一值（深 4.9:1 / 浅 3.6:1） */
+
+  /* ---- 阴影（仅两档，浮层与模态） ---- */
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.2);
+
+  /* ---- 布局固定尺寸 ----
+   * 2026-10-08 随字阶同步上调：字号 +1 档后，原行高与控件高度会显得拥挤。
+   *   顶栏 56→60 ｜ 表格行 48→52 ｜ 输入框 36→40 ｜ 图标按钮 32→36
+   * 面板宽度保持不变 —— 加宽会直接挤占工作台中栏的图像预览面积。 */
+  --layout-topbar-height: 60px;
+  --layout-left-panel-width: 320px;
+  --layout-left-panel-width-compact: 300px;
+  --layout-right-panel-width: 340px;
+  --layout-row-height: 52px;
+  --layout-field-height: 40px;
+  --layout-control-height: 36px;
+}
+
+/* ============================================================================
+ * 浅色主题覆盖
+ *
+ * ⚠️ 浅色不是深色的机械反相：强调色与语义色必须在浅底上重新取值，
+ *    否则同一个蓝/绿/黄在白底上对比度不足（详见 02-视觉与主题基线.md §6.3）。
+ * ========================================================================== */
+[data-theme='Light'] {
+  --Theme-bg-app: #f7f5f5;
+  --Theme-bg-panel: #ffffff;
+  --Theme-bg-elevated: #ffffff;
+  --Theme-bg-hover: #ededeb;
+
+  --Theme-border-subtle: #e3e0de;
+  --Theme-border-strong: #cfccc7;
+
+  --Theme-text-primary: #1a1a17;
+  --Theme-text-secondary: #5c5959;
+  --Theme-text-tertiary: #757370;
+
+  --Theme-primary: #0066bf;
+  --Theme-primary-hover: #0078d4;
+  --Theme-link: #0066bf;
+  --Theme-success: #0f7d40;
+  --Theme-warning: #996600;
+  --Theme-error: #c42b1c;
+
+  --Theme-on-primary: #ffffff;
+}

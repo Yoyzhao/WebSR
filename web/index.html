@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="WebSR · 本地图像超分辨率与修复" />
+    <title>WebSR · 图像超分修复</title>
+    <script>
+      /*
+       * 首屏防闪白：在模块脚本执行前先把主题落到 <html> 上。
+       * 与 useTheme 的规则保持一致（默认深色；手动选择优先于系统偏好）。
+       * 这段内联脚本只做「读取 + 应用」，不参与任何业务逻辑。
+       */
+      ;(function () {
+        try {
+          var mode = localStorage.getItem('websr.theme-mode') || 'dark'
+          var isLight =
+            mode === 'light' ||
+            (mode === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
+          var el = document.documentElement
+          el.dataset.theme = isLight ? 'Light' : 'Dark'
+          el.classList.toggle('dark', !isLight)
+          el.style.colorScheme = isLight ? 'light' : 'dark'
+        } catch (e) {
+          document.documentElement.dataset.theme = 'Dark'
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,106 @@
+/* ============================================================================
+ * 全局基础样式
+ *
+ * ⚠️ 本文件**只做重置与全局基线**，不含任何组件级样式，也不定义颜色值。
+ *    所有颜色一律来自 styles/tokens.css 的 --Theme-* 变量，
+ *    否则主题切换时这些元素不会跟随（02 §6.1）。
+ * ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-14);
+  line-height: 1.45;
+  color: var(--Theme-text-primary);
+  background: var(--Theme-bg-app);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin: 0;
+}
+
+button {
+  font-family: inherit;
+}
+
+a {
+  color: var(--Theme-link);
+}
+
+/* 滚动条：与主题一致，避免浅色模式下出现刺眼深色条 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--Theme-border-strong);
+  border-radius: var(--Scale-radius-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--Theme-text-tertiary);
+  background-clip: content-box;
+}
+
+/* 焦点可见性：键盘用户必须能看到焦点（04 §7 无障碍） */
+:focus-visible {
+  outline: 2px solid var(--Theme-primary);
+  outline-offset: 1px;
+}
+
+/* ============================================================================
+ * Element Plus 主题桥接
+ *
+ * EP 组件内部使用其自身的 CSS 变量。这里把我们的 token 映射进去，
+ * 使 EP 组件（消息、确认框、抽屉、弹窗）与业务界面视觉一致。
+ * EP 深色变量由 main.ts 引入的 dark/css-vars.css 提供，
+ * 并由 useTheme 在 <html> 上切换 .dark 类同步。
+ * ========================================================================== */
+:root {
+  --el-color-primary: var(--Theme-primary);
+  --el-color-success: var(--Theme-success);
+  --el-color-warning: var(--Theme-warning);
+  --el-color-danger: var(--Theme-error);
+  --el-color-error: var(--Theme-error);
+  --el-color-info: var(--Theme-text-tertiary);
+  --el-bg-color: var(--Theme-bg-panel);
+  --el-bg-color-overlay: var(--Theme-bg-elevated);
+  --el-text-color-primary: var(--Theme-text-primary);
+  --el-text-color-regular: var(--Theme-text-secondary);
+  --el-text-color-secondary: var(--Theme-text-tertiary);
+  --el-border-color: var(--Theme-border-subtle);
+  --el-border-color-light: var(--Theme-border-subtle);
+  --el-border-color-lighter: var(--Theme-border-subtle);
+  --el-fill-color-blank: var(--Theme-bg-panel);
+  --el-border-radius-base: var(--Scale-radius-button);
+  --el-font-size-base: var(--font-size-14);
+}

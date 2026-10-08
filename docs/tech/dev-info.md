@@ -10,7 +10,7 @@
 |---|---|
 | 项目拓扑 | **前后端分离** |
 | 前端框架 | **Vue 3 + Vite + TypeScript** |
-| UI 组件库 | 待定（步骤 5A 确认；候选 Element Plus / Naive UI） |
+| UI 组件库 | **Element Plus 2.14.6**（T-302 定案 2026-09-30） |
 | 后端框架 | **FastAPI**（Python）—— 见 ADR-001 |
 | 后端与推理关系 | **同进程内嵌**（FastAPI 进程内直接调用 ORT/OpenVINO），见 ADR-005 |
 | 数据库 | **SQLite**（存元信息；图片本体走文件系统）—— 见 ADR-002 |
@@ -34,7 +34,9 @@
 | 包管理器（JS） | **npm 11.12.1**（随 nvm 全局 Node） | `pnpm` / `yarn` / `bun` 未安装 |
 | Python | **3.13.12**（受管：`C:/Users/Yoy/.workbuddy/binaries/python/versions/3.13.12/python.exe`） | 系统版 `C:/Program Files/Python313/python.exe` 为 3.13.14 |
 | 包管理器（Python） | **uv 0.11.7** | 可用 |
-| 前端框架 | Vue 3 + Vite（版本待 `npm create vite` 时确定并回填） | — |
+| 前端框架 | **Vue 3.5.42 + Vite 8.3.0**（✅ **2026-09-30 `web/` 实际安装版本**） | 已落地，见 `web/package.json` |
+| 前端 UI 组件库 | **Element Plus 2.14.6** + **@element-plus/icons-vue 2.3.2** | T-302 定案（2026-09-30） |
+| UI 主题策略 | **深色默认 → 可切浅色 → 可跟随系统**（三态并存） | T-401 定案（2026-09-30）；机制见 §10 |
 | 后端框架 | FastAPI（版本待装并回填） | — |
 | 数据库 | SQLite（Python 内置 `sqlite3`） | 文件路径待定，建议 `data/app.db` |
 | 推理运行时 | `onnxruntime-gpu 1.22.0` / `openvino 2026.4.0` / `onnxruntime-openvino 1.24.1` | **沿用 `.venvs/` 三个已验证环境的设计**，但应用需新建独立环境 `sr-app` |
@@ -57,7 +59,7 @@
 
 ```
 E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
-├── web/                        # 前端（Vue 3 + Vite + TS）—— 待创建
+├── web/                        # 前端（Vue 3 + Vite + TS）—— ✅ 已创建（2026-09-30）
 │   ├── src/                    #   源码（views / components / api / stores / types）
 │   ├── package.json
 │   └── vite.config.ts
@@ -84,9 +86,14 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 │   ├── tech/
 │   │   ├── dev-info.md         #   本文件
 │   │   ├── tech-arch.md        #   技术架构
+│   │   ├── api-contract.md     #   API 契约（草案，5B 冻结）
 │   │   ├── research/           #   前置调研与实测证据（6 份，见其 README.md）
 │   │   └── arch/               #   ADR 架构决策记录
-│   ├── plan/project-progress.md
+│   ├── prototype/              #   ★ 前端原型（5A 产出）：7 页设计稿 + 6 份文档 + tokens.css + assets/
+│   ├── plan/
+│   │   ├── project-progress.md
+│   │   ├── project-dev-plan.md
+│   │   └── tasks/              #   阶段任务文档（M3/STEP-4.md、M4/STEP-5A.md …）
 │   ├── debug/  deploy/  test/  experience/
 ├── tools/                      # 基准与探测脚本（11 个 .py，既有约定，保留）
 ├── .venvs/                     # 项目内隔离环境
@@ -102,11 +109,11 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 
 | 入口 | 路径 | 状态 |
 |---|---|---|
-| 前端代码目录 | `web/` | 待创建（步骤 5C） |
+| 前端代码目录 | `web/` | ✅ 已创建（步骤 5C，2026-09-30） |
 | 后端代码目录 | `server/` | 待创建（步骤 5D） |
-| 前端启动 | `npm run dev`（在 `web/`） | 待创建 |
+| 前端启动 | `npm run dev`（在 `web/`） | ✅ 可用（`http://127.0.0.1:5173`，`strictPort` 固定端口） |
 | 后端启动 | `uv run uvicorn app.main:app --reload --port 8000`（在 `server/`） | 待创建 |
-| 前端构建 | `npm run build` | 待创建 |
+| 前端构建 | `npm run build` | ✅ 可用（`vue-tsc -b && vite build`，实测通过） |
 | 测试命令 | 后端 `pytest`；前端 `vitest`（待步骤 8 细化） | 待创建 |
 
 ---
@@ -217,3 +224,20 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | 8 | `.bin` 来源 | ✅ **OpenVINO IR 与 ncnn 都支持**，按配套文件分派（`.xml` → OpenVINO；`.param` → ncnn） | 用户确认；ADR-003。⚠️ **ncnn 在 Windows/Python 下的安装方式需验证**，见 tech-arch §7 风险 |
 
 **遗留待验证（不阻塞，但会影响实现）**：ncnn 运行时的获取方式、Vulkan 可用性、以及 ncnn 是否复现"黑图"已知 bug。
+
+---
+
+## 10. 前端主题机制（步骤 5A 定案）
+
+| 项 | 约定 |
+|---|---|
+| 主题形态 | **深色默认 → 可手动切浅色 → 可跟随系统**（三态并存） |
+| 默认值 | **深色**（`data-theme` 未设置或设为 `Dark`） |
+| 切换入口 | 顶栏主题按钮（**唯一入口**，禁止各页面自行加切换控件） |
+| 落地方式 | `<html>` 上设 `data-theme="Light"`；Element Plus 侧同时加 `dark` class 并引入其深色变量文件 |
+| Token 唯一来源 | `docs/prototype/tokens.css`（含 `[data-theme="Light"]` 覆盖块）→ 5C 落地到 `web/src/styles/tokens.css` |
+| 强调色对齐 | 必须把 `--el-color-primary` 覆盖为 `var(--Theme-primary)`，使组件库与设计稿一致 |
+| 持久化 | `localStorage`；手动切换后以手动值为准，不再跟随系统 |
+| 禁止 | ① 页面内硬编码色值；② 各组件自行判断深浅色（`if (isDark)`）；③ 把浅色做成深色的机械反相 |
+
+**完整规范**：`docs/prototype/02-视觉与主题基线.md` §6。其中记录了浅色模式**三处必须单独验证**的差异——强调色需加深（`#0078D4` → `#0067C0`）、语义色需重取（深色版的浅绿/浅黄在白底上不可读）、图片容器不得加描边。

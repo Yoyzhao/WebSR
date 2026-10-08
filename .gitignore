@@ -62,3 +62,17 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+
+# ---- 前端验证产物（5C 闭环验证用，非交付物）----
+# playwright-cli 每次运行都在工作目录生成大量页面快照（page-*.yml）、
+# 控制台日志与临时脚本；这些可随时重建，不入库。
+# 验证脚本的可复用副本已归档至 .workbuddy/verify/scripts/。
+web/.playwright-cli/
+web/playwright-cli.json
+# 手动执行 playwright-cli 时可能落在 web/ 根目录的散落快照
+web/*.yaml
+
+# Vite 缓存与 TS 增量构建信息
+web/node_modules/.vite/
+web/tsconfig.tsbuildinfo
+web/*.tsbuildinfo

@@ -1,0 +1,127 @@
+/* ============================================================================
+ * WebSR · 设计 token（从步骤 5A 设计稿导出）
+ *
+ * 来源：Ardot 设计文件「WebSR 前端原型 · S1」
+ * 变量集：Theme（Dark / Light 双模式，15 个颜色 token）
+ *         Scale（尺寸 token，10 个）
+ *
+ * 用法：
+ *   1. 以顶部 :root 块作为默认（深色）主题；
+ *   2. 主题切换时在 <html> 上设置 data-theme="Light"；
+ *   3. 5C 可重命名变量（如 --color-bg-app），但必须保持语义一一对应；
+ *   4. **禁止在页面中硬编码色值** —— 硬编码会让主题切换失效。
+ *
+ * 注意：本文件由设计稿导出，是「设计交付物」的副本。应用内实际使用时应放入
+ *       web/src/styles/，并由 5C 决定是否拆分/重命名。
+ * ========================================================================== */
+
+:root {
+  /* ---- 背景层级（由深到浅，共 4 层；用于建立信息层次，不靠分割线） ---- */
+  --Theme-bg-app: #0F0D0DFF;        /* 应用底：主工作台中栏、独立页背景 */
+  --Theme-bg-panel: #1A1A1AFF;      /* 面板：顶栏、左栏、右栏、卡片 */
+  --Theme-bg-elevated: #242424FF;   /* 抬升面：输入框、徽标、内嵌提示、次级按钮 */
+  --Theme-bg-hover: #292929FF;      /* 悬停 / 选中态 */
+
+  /* ---- 边框 ---- */
+  --Theme-border-subtle: #2E2E2EFF; /* 常规分隔：卡片描边、栏间分隔、表格线 */
+  --Theme-border-strong: #3D3D3DFF; /* 强调分隔：拖拽区虚线、聚焦态 */
+
+  /* ---- 文字（三级） ---- */
+  --Theme-text-primary: #F2F2F2FF;   /* 标题、关键数值、文件名 */
+  --Theme-text-secondary: #A8A8A8FF; /* 正文、标签、表头 */
+  --Theme-text-tertiary: #8C8C8CFF;  /* 辅助说明、占位符、次要元信息（对比度 5.2:1） */
+
+  /* ---- 强调与语义 ---- */
+  --Theme-primary: #0078D4FF;        /* 主操作按钮底色（全站唯一强调色） */
+  --Theme-primary-hover: #1A8AE0FF;
+  --Theme-link: #61CCFFFF;           /* 进行中状态、可点击文字、激活态强调 */
+  --Theme-success: #7DD9A6FF;        /* 已完成、可运行、验证通过 */
+  --Theme-warning: #E8C269FF;        /* 降级、保底档、条件支持、未标定 */
+  --Theme-error: #E07866FF;          /* 失败、不可用、删除操作 */
+
+  /* ---- 尺寸 ---- */
+  --Scale-radius-card: 8px;    /* 卡片、面板、大容器 */
+  --Scale-radius-inner: 6px;   /* 卡片内的次级容器 */
+  --Scale-radius-button: 4px;  /* 按钮、输入框、徽标 */
+  --Scale-radius-pill: 999px;  /* 胶囊：筛选 chip、状态徽标、开关、滑块把手 */
+  --Scale-space-1: 4px;
+  --Scale-space-2: 8px;
+  --Scale-space-3: 12px;
+  --Scale-space-4: 16px;
+  --Scale-space-5: 24px;
+  --Scale-space-6: 32px;
+}
+
+/* ============================================================================
+ * 浅色主题覆盖
+ * 切换方式：document.documentElement.dataset.theme = 'Light'
+ *
+ * ⚠️ 浅色模式不是"深色反相"：强调色与语义色需要在浅底上重新取值，
+ *    否则同一个蓝/绿/黄在浅底上对比度不足（详见 02-视觉与主题基线.md §6）。
+ * ========================================================================== */
+[data-theme="Light"] {
+  --Theme-bg-app: #F7F5F5FF;
+  --Theme-bg-panel: #FFFFFFFF;
+  --Theme-bg-elevated: #FFFFFFFF;
+  --Theme-bg-hover: #EDEDEBFF;
+
+  --Theme-border-subtle: #E3E0DEFF;
+  --Theme-border-strong: #CFCCC7FF;
+
+  --Theme-text-primary: #1A1A17FF;
+  --Theme-text-secondary: #5C5959FF;
+  --Theme-text-tertiary: #757370FF;
+
+  --Theme-primary: #0066BFFF;        /* 比深色版更深：保证白底上的文字对比度 */
+  --Theme-primary-hover: #0078D4FF;
+  --Theme-link: #0066BFFF;
+  --Theme-success: #0F7D40FF;
+  --Theme-warning: #996600FF;
+  --Theme-error: #C42B1CFF;
+}
+
+/* ============================================================================
+ * 补充：非 token 化的固定约定（不随主题变化）
+ * ========================================================================== */
+
+:root {
+  /* 字体族：中文用 Noto Sans SC，西文/数字用 Inter，技术数值用等宽 */
+  --font-sans: "Inter", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+
+  /* 字号层级（工具型界面，整体偏小、信息密度高）
+   *
+   * 2026-10-08 整体上调一档，补偿 2K 分辨率下的像素密度（用户反馈默认偏小）：
+   *   原 10 / 11 / 12 / 13 / 15 / 18 / 24  →  现 11 / 12 / 13 / 14 / 16 / 20 / 26
+   * 采用重新编号而非「改值不改名」—— token 名始终等于像素值。 */
+  --font-size-11: 11px;  /* 格式徽标 */
+  --font-size-12: 12px;  /* 表格单元格、元信息、辅助说明 */
+  --font-size-13: 13px;  /* 主要正文、按钮、表单标签 */
+  --font-size-14: 14px;  /* 面板标题、卡片标题、输入值 */
+  --font-size-16: 16px;  /* 品牌名、空态主文案 */
+  --font-size-20: 20px;  /* 独立页标题 */
+  --font-size-26: 26px;  /* 档位大徽标（唯一的大字号） */
+
+  /* 行高 */
+  --line-height-tight: 1.3;
+  --line-height-body: 1.45;
+  --line-height-relaxed: 1.55;  /* 长段说明文字 */
+
+  /* 图标描边宽度（全站统一） */
+  --icon-stroke: 1.8;
+  --icon-color: #8A8A8A;  /* 图标用中间灰：在两种主题下均达 3:1 以上对比度 */
+
+  /* 阴影（源自 Fluent 层次规范） */
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.2);
+
+  /* 布局固定尺寸
+   * 2026-10-08 随字阶同步上调（字号 +1 档后原行高会显得拥挤）：
+   *   顶栏 56→60 ｜ 表格行 48→52 ｜ 输入框 36→40 ｜ 图标按钮 32→36 */
+  --layout-topbar-height: 60px;
+  --layout-left-panel-width: 320px;
+  --layout-right-panel-width: 340px;
+  --layout-row-height: 52px;      /* 表格行 */
+  --layout-field-height: 40px;    /* 输入框、下拉 */
+  --layout-control-height: 36px;  /* 图标按钮 */
+}
