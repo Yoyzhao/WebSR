@@ -288,7 +288,7 @@ onMounted(async () => {
           </div>
         </SectionCard>
 
-        <SectionCard title="参数">
+        <SectionCard title="参数" class="wb-params">
           <SettingsRow label="自动档" hint="tile / 精度 / 后端由引擎按实测标定决定">
             <SegmentedControl
               :model-value="autoMode ? 'auto' : 'manual'"
@@ -780,10 +780,62 @@ onMounted(async () => {
   border-color: var(--Theme-primary);
 }
 
+/* ---- 窄栏参数行（左栏参数卡片与窄屏参数抽屉共用） ----
+ * 卡体仅约 280px，SettingsRow 的「两端对齐」在此不成立：
+ *   ① 各控件宽度本就不同（自动/手动 104px、256/384/512 155px、fp32/fp16 95px），
+ *      贴右对齐会让控件**左边界逐行错位**，看上去是一列锯齿；
+ *   ② 最宽的一行（后端 4 项合计 247px）超出可用宽度 228px，折成 3 + 1 两行，
+ *      第二行只剩一个按钮，更显零散。
+ * 改为「固定 label 列 + 控件左对齐」：所有控件自同一 x 起排，形成规整的纵向
+ * 基线；hint 随控件左对齐，不再与下一行 label 形成对角关系。 */
+.wb-params :deep(.settings-row),
+.wb-drawer-body :deep(.settings-row) {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+}
+
+.wb-params :deep(.settings-row__value),
+.wb-drawer-body :deep(.settings-row__value) {
+  align-items: flex-start;
+  text-align: left;
+}
+
+/* hint 折行时按「长度均衡」断行，避免末行只剩一个字
+ * （如「…由引擎按实测标定决 / 定」）。
+ * 不支持该属性的浏览器退回普通折行，不影响可用性。 */
+.wb-params :deep(.settings-row__hint),
+.wb-drawer-body :deep(.settings-row__hint) {
+  text-wrap: balance;
+}
+
+/* ---- 参数分组：只加 1 条分割线 ----
+ * 6 个参数行按语义分两组：
+ *   组 1（第 1–3 行）自动档 / 模型 / 放大倍数  —— 由用户直接决定
+ *   组 2（第 4–6 行）分块 tile / 精度 / 后端   —— 「自动档」打开时由引擎接管
+ * 线只画在组间，用来标记**语义边界**；组内仍靠留白建立层次，因此不与
+ * 「用留白而非分割线制造层次」的基线（02 §32、禁止事项第 7 条）相悖。
+ *
+ * 为什么**不逐行**加线：6 条线会让卡片高度增加约 40%、逼出滚动；更关键的是
+ * 6 条等权重的线会稀释「这 6 项里哪 3 项会被自动档接管」这个真正要传达的信息。
+ * 为什么**不做卡片式**：卡体内填 padding 会压缩内容宽度（272 → 248px），
+ * 使 hint 折行变多；6 个嵌套卡片也让层级过重。两者均经实测排除。 */
+.wb-params :deep(.settings-row:nth-child(4)),
+.wb-drawer-body :deep(.settings-row:nth-child(4)) {
+  border-top: 1px solid var(--Theme-border-subtle);
+  margin-top: 10px;
+  padding-top: 18px;
+}
+
+/* 后端选项：固定 2×2 网格。
+ * 原为 flex-wrap，4 项放不下时自然折成 3 + 1，孤行很难看；网格让四个按钮
+ * 等宽、两行对齐，也把长标签（OpenVINO / TensorRT，实测 78px）稳在单元格内。 */
 .wb-backends {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 5px;
+  width: 100%;
 }
 
 .wb-be {
@@ -794,9 +846,13 @@ onMounted(async () => {
   font-family: var(--font-mono);
   font-size: var(--font-size-12);
   line-height: 16px;
-  padding: 2px 9px;
+  padding: 4px 6px;
   border-radius: var(--Scale-radius-button);
   cursor: pointer;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wb-be:hover:not(:disabled) {
