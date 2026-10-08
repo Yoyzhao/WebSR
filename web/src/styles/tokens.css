@@ -52,7 +52,13 @@
   --Scale-space-5: 24px;
   --Scale-space-6: 32px;
 
-  /* ---- 字体族 ---- */
+  /* ---- 字体族 ----
+   * Inter 与 JetBrains Mono 为**自托管拉丁子集**（见 styles/fonts.css，合计 86 KB）。
+   * 两者的 unicode-range 仅覆盖拉丁字符，中文会自动跳过它们、回退到系统字体：
+   *     拉丁字符 → Inter（自托管） ｜ 中文字符 → Noto Sans SC（系统字体）
+   * 之所以自托管：字体栈首位若未安装会静默回退，导致不同机器字宽不一、
+   * 换行与列宽随之改变，视觉验收无法复现（2026-10-08）。
+   * 后续档位按系统可用性兜底，避免缺字体时落到衬线体。 */
   --font-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
 

@@ -85,7 +85,14 @@
  * ========================================================================== */
 
 :root {
-  /* 字体族：中文用 Noto Sans SC，西文/数字用 Inter，技术数值用等宽 */
+  /* 字体族：中文用 Noto Sans SC，西文/数字用 Inter，技术数值用等宽
+   *
+   * 2026-10-08 交付方式确定：Inter 与 JetBrains Mono **随应用自托管**
+   * （拉丁子集，合计约 86 KB；声明见 web/src/styles/fonts.css）。
+   * 中文不走 webfont —— unicode-range 把这两个字体限定在拉丁字符，
+   * 中文字符自动跳过它们、回退到 'Noto Sans SC'（系统字体）。
+   * 自托管动因：字体栈首位若未安装会**静默回退**，导致不同机器字宽不一、
+   * 换行与列宽随之改变，视觉验收不可复现。 */
   --font-sans: "Inter", "Noto Sans SC", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
 

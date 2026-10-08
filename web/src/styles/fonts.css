@@ -1,0 +1,48 @@
+/* ============================================================================
+ * 自托管 Web 字体（仅拉丁子集）
+ *
+ * 2026-10-08 新增。此前项目**未引入任何 webfont**，字体完全依赖系统安装；
+ * 而字体栈首位的 Inter 与 JetBrains Mono 在本机均未安装，实际渲染回退到了
+ * 第二顺位（Noto Sans SC / Cascadia Mono）。
+ *
+ * 后果不是「难看」，而是**视觉验收不可复现**：换一台装过 Inter 的机器，
+ * 字宽随之改变，换行位置与表格列宽跟着变。故自托管两份拉丁子集锁定设计意图。
+ *
+ * 来源：@fontsource-variable 5.3.0
+ *   @fontsource-variable/inter          → inter-latin-wght-normal.woff2
+ *   @fontsource-variable/jetbrains-mono → jetbrains-mono-latin-wght-normal.woff2
+ * 两者均为**可变字体**：一个文件覆盖全部字重，无需按字重分别打包。
+ *
+ * 体积：Inter 47 KB ＋ JetBrains Mono 39 KB ≈ **86 KB**（仅 latin 子集）。
+ *       只取 latin —— 界面无西里尔/希腊/越南字符，那些子集不打包。
+ *
+ * ⚠️ 中文不走 webfont：中文字体动辄数 MB，且系统普遍已自带。
+ *    因此下面用 unicode-range 把这两个字体**限定在拉丁字符**；中文字符会
+ *    自动跳过它们，由 --font-sans 的 'Noto Sans SC' 承接。回退链因此是：
+ *        拉丁字符 → Inter（自托管） ｜ 中文字符 → Noto Sans SC（系统字体）
+ *
+ * 字体族名取 'Inter' / 'JetBrains Mono'（而非包默认的 'Inter Variable'），
+ * 与 tokens.css 中既有字体栈一致 —— 业务样式**无需任何改动**。
+ * ========================================================================== */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/inter-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('../assets/fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
