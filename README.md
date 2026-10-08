@@ -10,9 +10,12 @@
 
 | 项 | 值 |
 |---|---|
-| **进度** | **M1 需求与 PRD ✅ 已验收** ｜ **M2 技术架构（步骤 3）产出已完成，待验收** |
-| 下一里程碑 | M3 任务拆解与开发计划（步骤 4） |
-| 代码目录 | `web/`（前端）与 `server/`（后端）**尚未创建**，将在步骤 5C / 5D 建立 |
+| **进度** | **M0–M4 全部完成**（M1/M2/M3 已验收；M4 前端原型与交互契约已完成）｜**M5 进行中** |
+| 当前阶段 | **步骤 5C 前端实现** —— ✅ **已验收通过**（2026-10-08；`web/` 可 `npm run dev`，**18 项闭环全部走通**） |
+| 下一步 | **步骤 5D**：`server/` 后端骨架与业务 + 引擎核心 |
+| 门控 | 5D 验收通过后，**先完成 `T-700`（契约 v1.0 定稿）**才可进入真实接口联调（`T-701`） |
+| 代码目录 | `web/` ✅ 已创建（15 业务组件 / 6 视图 / Mock 驱动）｜ `server/` 待创建（步骤 5D） |
+| 契约状态 | `docs/tech/api-contract.md` 为**草案**（7 个冻结点中 3 项已定、5 项待 `T-700`）——详见该文件 §7 |
 
 > 里程碑、任务池与验收状态的**唯一事实源**是 [`docs/plan/project-progress.md`](docs/plan/project-progress.md)。
 
@@ -62,8 +65,8 @@ WebSR/
 │   └── app.db             #   SQLite 元信息库（运行时创建）
 ├── docs/                  # 文档（见下方「文档地图」）
 ├── tools/                 # 基准与探测脚本（开发期工具，不参与应用运行时）
-├── web/                   # 前端（Vue 3 + Vite + TS）—— 待创建
-├── server/                # 后端（FastAPI）—— 待创建
+├── web/                   # 前端（Vue 3 + Vite + TS）—— ✅ 已创建（步骤 5C）
+├── server/                # 后端（FastAPI）—— 待创建（步骤 5D）
 ├── .venvs/                # 隔离的 Python 推理环境（不进版本库）
 └── .workbuddy/            # 工具链数据：项目记忆 + 基准结果
 ```
@@ -74,7 +77,7 @@ WebSR/
 
 ## 快速开始
 
-> ⚠️ `web/` 与 `server/` 尚未创建（步骤 5C / 5D）。以下命令是**目标形态**，当前不可执行。
+> ⚠️ `web/` 已可运行（步骤 5C 已完成，**Mock 驱动**：`web/src/api/client.ts` 的 `USE_MOCK = true` 是唯一切换点）；`server/` 尚未创建（步骤 5D）。**下列后端命令当前不可执行**，前端命令可用。
 
 **前置条件**
 
@@ -129,6 +132,9 @@ npm run dev        # http://127.0.0.1:5173
 | 技术架构 | [`docs/tech/tech-arch.md`](docs/tech/tech-arch.md) | 分层、模块边界、数据模型、API 与 SSE 规范、引擎五阶段 |
 | 架构决策 | [`docs/tech/arch/`](docs/tech/arch/) | ADR-001~005 |
 | 环境信息 | [`docs/tech/dev-info.md`](docs/tech/dev-info.md) | 技术栈、版本、端口、环境变量 |
+| API 契约 | [`docs/tech/api-contract.md`](docs/tech/api-contract.md) | 端点、统一错误体（16 码）、SSE 事件定义（**草案**，`T-700` 全量定稿） |
+| 前端原型 | [`docs/prototype/`](docs/prototype/) | **设计 token 唯一来源**（`tokens.css`）+ 6 份规范文档 + 9 张页面图 |
+| 阶段任务文档 | [`docs/plan/tasks/`](docs/plan/tasks/) | 各里程碑阶段的执行细节与验证结果（M3/M4/M5） |
 | 前置调研 | [`docs/tech/research/`](docs/tech/research/) | 6 份调研与实测报告（含 P0 实测证据） |
 | 项目进度 | [`docs/plan/project-progress.md`](docs/plan/project-progress.md) | **调度状态唯一事实源** |
 

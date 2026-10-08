@@ -1,6 +1,6 @@
 # 开发环境信息
 
-> 最后更新：2026-09-30（步骤 3 技术栈已确认）
+> 最后更新：2026-10-08（步骤 3 技术栈已确认；5C 前端已落地并回填实际版本）
 
 ---
 
@@ -14,7 +14,7 @@
 | 后端框架 | **FastAPI**（Python）—— 见 ADR-001 |
 | 后端与推理关系 | **同进程内嵌**（FastAPI 进程内直接调用 ORT/OpenVINO），见 ADR-005 |
 | 数据库 | **SQLite**（存元信息；图片本体走文件系统）—— 见 ADR-002 |
-| ORM | 待定（建议 SQLAlchemy 2.x + Alembic 迁移） |
+| ORM | ⬜ **待定案**（任务 `T-303`，已于 M3 移入 **5D 入口**执行）—— 建议 SQLAlchemy 2.x + Alembic 迁移 |
 | 异步任务 | 进程内任务队列 + **SSE** 推送进度（见 ADR-005）；**uvicorn 必须单 worker**（SSE 依赖进程内广播） |
 | 训练依赖 | **不引入**：应用内**不含 PyTorch 训练栈**（F-13 为离线形态，见 PRD §7.6）。`.venvs/sr-app` **不含 torch** |
 | 前端包管理器 | **npm**（随 nvm4w 全局 Node） |
@@ -36,6 +36,9 @@
 | 包管理器（Python） | **uv 0.11.7** | 可用 |
 | 前端框架 | **Vue 3.5.42 + Vite 8.3.0**（✅ **2026-09-30 `web/` 实际安装版本**） | 已落地，见 `web/package.json` |
 | 前端 UI 组件库 | **Element Plus 2.14.6** + **@element-plus/icons-vue 2.3.2** | T-302 定案（2026-09-30） |
+| 前端字体 | **自托管拉丁子集可变字体**：`@fontsource-variable/inter` / `@fontsource-variable/jetbrains-mono` **5.3.0** | 10-08 引入。**只取 latin 子集**（`unicode-range` 限定），中文回退系统 Noto Sans SC —— 中文**不打包** webfont。落地：`web/src/assets/fonts/`（Inter 47 KB + JetBrains Mono 39 KB）+ `web/src/styles/fonts.css`。详见 `docs/prototype/README.md` §8 |
+| 前端状态 / 路由 | **pinia 4.0.3** + **vue-router 4.6.4** | `web/package.json`（10-08 实际安装版本） |
+| 前端日期库 | **dayjs 1.11.23**（`utc` + `timezone` 插件） | 时区固定 `Asia/Shanghai`，不依赖浏览器时区 |
 | UI 主题策略 | **深色默认 → 可切浅色 → 可跟随系统**（三态并存） | T-401 定案（2026-09-30）；机制见 §10 |
 | 后端框架 | FastAPI（版本待装并回填） | — |
 | 数据库 | SQLite（Python 内置 `sqlite3`） | 文件路径待定，建议 `data/app.db` |
@@ -59,11 +62,11 @@
 
 ```
 E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
-├── web/                        # 前端（Vue 3 + Vite + TS）—— ✅ 已创建（2026-09-30）
-│   ├── src/                    #   源码（views / components / api / stores / types）
+├── web/                        # 前端（Vue 3 + Vite + TS）—— ✅ 已创建（2026-09-30，步骤 5C）
+│   ├── src/                    #   源码（views / components / api / stores / types / styles）
 │   ├── package.json
 │   └── vite.config.ts
-├── server/                     # 后端（FastAPI）—— 待创建
+├── server/                     # 后端（FastAPI）—— 待创建（步骤 5D）
 │   ├── app/
 │   │   ├── main.py             #   FastAPI 入口
 │   │   ├── api/                #   路由（按 PRD §5 的接口分组）
@@ -86,14 +89,14 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 │   ├── tech/
 │   │   ├── dev-info.md         #   本文件
 │   │   ├── tech-arch.md        #   技术架构
-│   │   ├── api-contract.md     #   API 契约（草案，5B 冻结）
+│   │   ├── api-contract.md     #   API 契约（草案；最终冻结在 T-700 / M6）
 │   │   ├── research/           #   前置调研与实测证据（6 份，见其 README.md）
 │   │   └── arch/               #   ADR 架构决策记录
-│   ├── prototype/              #   ★ 前端原型（5A 产出）：7 页设计稿 + 6 份文档 + tokens.css + assets/
+│   ├── prototype/              #   ★ 前端原型（5A 产出）：9 张页面图 + 6 份文档 + tokens.css + assets/
 │   ├── plan/
 │   │   ├── project-progress.md
 │   │   ├── project-dev-plan.md
-│   │   └── tasks/              #   阶段任务文档（M3/STEP-4.md、M4/STEP-5A.md …）
+│   │   └── tasks/              #   阶段任务文档（M3/STEP-4.md、M4/STEP-5A.md、M5/STEP-5C.md …）
 │   ├── debug/  deploy/  test/  experience/
 ├── tools/                      # 基准与探测脚本（11 个 .py，既有约定，保留）
 ├── .venvs/                     # 项目内隔离环境
@@ -101,8 +104,9 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 │   └── sr-app                  #   ★ 应用自身依赖环境 —— 待创建（**不含 torch**：应用内无训练执行）
 ├── .workbuddy/                 # 【工具链数据】非应用数据
 │   ├── results/                #   基准结果（原始 profile 在 ort_profiles/）
+│   ├── verify/                 #   5C 闭环验证证据（shots/ 截图 + scripts/ 脚本）
 │   └── memory/                 #   项目记忆
-└── todo.txt                    # 用户手写需求备忘（已成稿转入 docs/prd/prd.md）
+└── (顶层无 todo.txt —— 需求备忘已成稿转入 `docs/prd/prd.md`)
 ```
 
 > **三个边界**：① `data/`（应用数据，可迁移）↔ `.workbuddy/`（工具链产物，不交付）；② `web/`+`server/`（应用代码）↔ `tools/`（开发工具）；③ `.venvs/sr-app`（应用依赖）↔ `sr-gpu`/`sr-ov`/`sr-ovep`（基准验证环境，**应用不得污染**）。
@@ -175,7 +179,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `HF_ENDPOINT` | 模型下载镜像源（可选） | `.env.dev` | 否 |
 | `APP_*`（生产覆盖值） | 生产环境同名覆盖 | `.env.prd` | **是（不跟踪）** |
 
-> 安全约束：敏感信息只写入环境变量文件；`.env.prd` **必须**加入 `.gitignore`。当前项目**尚无 git 仓库**，初始化 git 时必须先建 `.gitignore`。
+> 安全约束：敏感信息只写入环境变量文件；`.env.prd` **必须**加入 `.gitignore` —— **已落实**：仓库已初始化并推送至 `https://github.com/Yoyzhao/WebSR.git`（`main`），`.gitignore` 已排除 `.env.prd`、`.venvs/`、运行期数据与前端验证产物。
 > 变量名以 `APP_` 前缀统一，避免与系统环境变量冲突。
 
 ---
