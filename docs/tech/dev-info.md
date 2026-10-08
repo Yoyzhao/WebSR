@@ -14,7 +14,7 @@
 | 后端框架 | **FastAPI**（Python）—— 见 ADR-001 |
 | 后端与推理关系 | **同进程内嵌**（FastAPI 进程内直接调用 ORT/OpenVINO），见 ADR-005 |
 | 数据库 | **SQLite**（存元信息；图片本体走文件系统）—— 见 ADR-002 |
-| ORM | ⬜ **待定案**（任务 `T-303`，已于 M3 移入 **5D 入口**执行）—— 建议 SQLAlchemy 2.x + Alembic 迁移 |
+| ORM | ✅ **定案**：**SQLAlchemy 2.x 同步引擎 + Alembic**（`T-303`，见 [ADR-006](arch/ADR-006-ORM与迁移方案.md)） |
 | 异步任务 | 进程内任务队列 + **SSE** 推送进度（见 ADR-005）；**uvicorn 必须单 worker**（SSE 依赖进程内广播） |
 | 训练依赖 | **不引入**：应用内**不含 PyTorch 训练栈**（F-13 为离线形态，见 PRD §7.6）。`.venvs/sr-app` **不含 torch** |
 | 前端包管理器 | **npm**（随 nvm4w 全局 Node） |
@@ -32,8 +32,9 @@
 | 终端 | Git Bash（POSIX sh）；另有 PowerShell 5.1 可用 | bash 为默认终端 |
 | Node.js | **v24.15.0**（**nvm4w 全局**：`C:/nvm4w/nodejs/node.exe`） | ✅ **项目统一使用 nvm4w 全局版本**（用户指定）；**不使用** Agent 受管的 22.22.2 |
 | 包管理器（JS） | **npm 11.12.1**（随 nvm 全局 Node） | `pnpm` / `yarn` / `bun` 未安装 |
-| Python | **3.13.12**（受管：`C:/Users/Yoy/.workbuddy/binaries/python/versions/3.13.12/python.exe`） | 系统版 `C:/Program Files/Python313/python.exe` 为 3.13.14 |
-| 包管理器（Python） | **uv 0.11.7** | 可用 |
+| Python | **3.13.14**（受管：`C:/Users/Yoy/.workbuddy/binaries/python/versions/3.13.12/python.exe`） | ⚠️ **目录名 `3.13.12` 与实际解释器版本 `3.13.14` 不一致**（2026-10-08 实测纠正，原记录把两者写反了）。系统版 `C:/Program Files/Python313/python.exe` 为 **3.13.12** |
+| 包管理器（Python） | **uv 0.12.21**（2026-10-08 实测） | 可用 |
+| SQLite（运行时，随 Python 内置） | **lib 3.53.1** · `sqlite3.threadsafety = 3`（serialized） | 2026-10-08 实测能力：**json1 / RETURNING / STRICT 表 / UPSERT / 生成列** 全部可用 |
 | 前端框架 | **Vue 3.5.42 + Vite 8.3.0**（✅ **2026-09-30 `web/` 实际安装版本**） | 已落地，见 `web/package.json` |
 | 前端 UI 组件库 | **Element Plus 2.14.6** + **@element-plus/icons-vue 2.3.2** | T-302 定案（2026-09-30） |
 | 前端字体 | **自托管拉丁子集可变字体**：`@fontsource-variable/inter` / `@fontsource-variable/jetbrains-mono` **5.3.0** | 10-08 引入。**只取 latin 子集**（`unicode-range` 限定），中文回退系统 Noto Sans SC —— 中文**不打包** webfont。落地：`web/src/assets/fonts/`（Inter 47 KB + JetBrains Mono 39 KB）+ `web/src/styles/fonts.css`。详见 `docs/prototype/README.md` §8 |
@@ -41,6 +42,7 @@
 | 前端日期库 | **dayjs 1.11.23**（`utc` + `timezone` 插件） | 时区固定 `Asia/Shanghai`，不依赖浏览器时区 |
 | UI 主题策略 | **深色默认 → 可切浅色 → 可跟随系统**（三态并存） | T-401 定案（2026-09-30）；机制见 §10 |
 | 后端框架 | FastAPI（版本待装并回填） | — |
+| ORM / 迁移 | **SQLAlchemy 2.1.4** + **Alembic 1.20.0** | ✅ 2026-10-08 装入 `.venvs/sr-app` 并实测（建表 / batch 改列 / 降级 / 幂等）。见 [ADR-006](arch/ADR-006-ORM与迁移方案.md) |
 | 数据库 | SQLite（Python 内置 `sqlite3`） | 文件路径待定，建议 `data/app.db` |
 | 推理运行时 | `onnxruntime-gpu 1.22.0` / `openvino 2026.4.0` / `onnxruntime-openvino 1.24.1` | **沿用 `.venvs/` 三个已验证环境的设计**，但应用需新建独立环境 `sr-app` |
 
@@ -101,7 +103,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 ├── tools/                      # 基准与探测脚本（11 个 .py，既有约定，保留）
 ├── .venvs/                     # 项目内隔离环境
 │   ├── sr-gpu / sr-ov / sr-ovep   # 基准与验证环境（不得污染）
-│   └── sr-app                  #   ★ 应用自身依赖环境 —— 待创建（**不含 torch**：应用内无训练执行）
+│   └── sr-app                  #   ★ 应用自身依赖环境 —— ✅ 已创建（2026-10-08；**不含 torch**：应用内无训练执行）
 ├── .workbuddy/                 # 【工具链数据】非应用数据
 │   ├── results/                #   基准结果（原始 profile 在 ort_profiles/）
 │   ├── verify/                 #   5C 闭环验证证据（shots/ 截图 + scripts/ 脚本）
@@ -142,6 +144,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `.venvs/sr-gpu` | 3.1 GB | `onnxruntime-gpu 1.22.0`、`nvidia-ml-py 13.610.43`、`numpy 2.5.3`、`psutil 7.2.2` | NVIDIA 路径（**真正验证过 CUDA EP 生效**，见 P0 报告 §2） |
 | `.venvs/sr-ov` | 594 MB | `onnxruntime-openvino 1.24.1`、`openvino 2026.4.0`、`numpy 2.5.3` | OpenVINO **原生**路径 |
 | `.venvs/sr-ovep` | 384 MB | `onnxruntime-openvino 1.24.1`、`openvino 2025.4.1`、`numpy 2.3.5` | ORT + OpenVINO EP **配对环境**（仅用于验证 EP 行为） |
+| **`.venvs/sr-app`** | — | **SQLAlchemy 2.1.4**、**Alembic 1.20.0**、mako、markupsafe、typing-extensions | ★ **应用自身依赖环境**（**不含 torch**）。2026-10-08 建立；随 5D 逐步补齐 FastAPI / uvicorn / onnxruntime 等 |
 
 > ⚠️ `sr-ov` 与 `sr-ovep` 的 openvino 版本**必须不同**：`onnxruntime-openvino 1.24.1` 是针对 **2025.4.1** 编译的，装 2026.4.0 会 ABI 不兼容并**静默回退 CPU**。详见 P0 报告 §5.3。
 

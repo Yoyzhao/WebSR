@@ -38,7 +38,8 @@
   - `sr-ov`：OpenVINO 原生（openvino 2026.4.0）
   - `sr-ovep`：ORT + OpenVINO EP 配对（openvino **2025.4.1**，与 `onnxruntime-openvino 1.24.1` ABI 匹配）
   - ⚠️ `sr-ov` 若用于 ORT + OpenVINO EP 会**静默回退 CPU**，不要这么做。
-- 应用自身的后端依赖应新建独立环境（如 `.venvs/sr-app`），**不要**污染上述三个基准环境。
+- 应用自身的后端依赖使用独立环境 **`.venvs/sr-app`**（✅ 2026-10-08 已建立，**不含 torch** —— 应用内无训练执行），**不要**污染上述三个基准环境。
+- **ORM 与迁移**（`T-303` 定案，见 ADR-006）：**SQLAlchemy 2.x 同步引擎 + Alembic**。SQLite 适配的 11 条约束（`render_as_batch`、迁移期 `foreign_keys=OFF`、PRAGMA 只走 connect 事件、`UTCDateTime`、枚举不设 CHECK 等）**违反即返工**。
 
 ### 2.2 推理引擎设计铁律
 

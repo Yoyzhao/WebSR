@@ -63,6 +63,12 @@ desktop.ini
 .idea/
 .vscode/
 
+# ---- 开发期验证产物（可随时重建，不入库）----
+# ORM/Alembic 冒烟工程（ADR-006 附录 C）：脚本与报告入库，SQLite 库文件不入库
+.workbuddy/verify/orm-smoke/*.db
+.workbuddy/verify/orm-smoke/*.db-wal
+.workbuddy/verify/orm-smoke/*.db-shm
+
 # ---- 前端验证产物（5C 闭环验证用，非交付物）----
 # playwright-cli 每次运行都在工作目录生成大量页面快照（page-*.yml）、
 # 控制台日志与临时脚本；这些可随时重建，不入库。

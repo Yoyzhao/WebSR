@@ -170,11 +170,11 @@ flowchart TB
 |---|---|---|---|---|
 | 前端框架 | **Vue 3 + Vite** | 装时确定 | 生态成熟、上手快、体积小，适合工具型界面 | [ADR-001](arch/ADR-001-前后端技术栈选型.md) |
 | 前端语言 | **TypeScript** | 装时确定 | 与后端契约对齐，减少字段错配 | ADR-001 |
-| UI 组件库 | 待定（步骤 5A） | — | 候选 Element Plus / Naive UI | — |
+| UI 组件库 | **Element Plus** | **2.14.6** | 已定案于 5A 入口（`T-302`）；理由见 `tasks/M4/STEP-5A.md` §T-302 | — |
 | 后端框架 | **FastAPI** | 装时确定 | **Python 是硬约束**（推理栈）；原生 async + SSE 契合长任务 | ADR-001 |
 | ASGI 服务器 | uvicorn | 装时确定 | FastAPI 标准搭配 | ADR-001 |
 | 数据库 | **SQLite**（WAL） | Python 内置 | 零配置、单文件、随数据根迁移；与"不做 Docker"契合 | [ADR-002](arch/ADR-002-元信息库选SQLite.md) |
-| ORM | SQLAlchemy 2.x + Alembic | 装时确定 | 抽象掉 SQLite 特性，便于将来迁 PostgreSQL | ADR-002 |
+| ORM | **SQLAlchemy 2.x（同步引擎）** + **Alembic** | SQLAlchemy **2.1.4** / Alembic **1.20.0**（实测） | 抽象掉 SQLite 特性，便于将来迁 PostgreSQL | [ADR-002](arch/ADR-002-元信息库选SQLite.md) / [ADR-006](arch/ADR-006-ORM与迁移方案.md) |
 | 数据校验 | Pydantic v2 | 随 FastAPI | 请求/响应 DTO 与配置校验 | ADR-001 |
 | 推理运行时 | ONNX Runtime / OpenVINO / ncnn | 见 `dev-info.md` §5.1 | 复用已验证资产 | [ADR-003](arch/ADR-003-模型格式支持策略.md) |
 | 异步任务 | 进程内队列 + SSE | — | 零额外基础设施；推理不占事件循环 | [ADR-005](arch/ADR-005-推理内嵌与异步任务.md) |
@@ -280,6 +280,10 @@ erDiagram
 | `TASK.status` 含 `canceling` | PRD §6.2 要求"取消中"对用户可见。取消是**协作式**的（ADR-005：分块循环逐块检查标志），点取消后先进入 `canceling`，线程确认退出才转 `canceled` |
 | 时间字段存 **UTC** | 展示层按 `Asia/Shanghai` 转换，避免时区歧义 |
 | 图片**不存库**，只存相对路径 | 与 ADR-002 一致；路径相对 `data/` 存储，便于整个数据根迁移 |
+| **索引**（ER 图未含） | 见 [ADR-006](arch/ADR-006-ORM与迁移方案.md) 附录 B：`TASK(status, created_at)` ｜ `ARTIFACT(task_id)` ｜ `MODEL(sha256)` 唯一 ｜ `CALIBRATION(model_id, hardware_fingerprint, valid)`。任务中心是"按状态筛选 + 按时间倒序分页"，缺该复合索引会退化为全表扫描 |
+| `MODEL.supported_backends` **落库为 JSON 数组** | ER 图标注的 `string` 仅为 Mermaid 类型简写；实现统一用 JSON 列（[ADR-006](arch/ADR-006-ORM与迁移方案.md) §C-11），**不得**用逗号分隔字符串 |
+| 时间字段用自定义 `UTCDateTime` 类型 | SQLite 的 `DateTime(timezone=True)` 读回会**丢失 tzinfo**（实测），故用 `UTCDateTime` 封装"写入 naive UTC / 读出贴 UTC"（[ADR-006](arch/ADR-006-ORM与迁移方案.md) §C-10） |
+| 枚举字段 DB 层**不设 CHECK** | `TASK.status` 等取值会增长（`canceling`/`interrupted` 均为后期补入），约束放 Python 层，避免新增枚举值就要迁移（[ADR-006](arch/ADR-006-ORM与迁移方案.md) §C-11） |
 
 ---
 
@@ -541,6 +545,7 @@ PRD §1.4 的"数值运行时求"有一条**显式例外**：标定完成之前�
 | [ADR-003](arch/ADR-003-模型格式支持策略.md) | 模型格式支持策略（4 格式；pth/safetensors 离线转换；bin 双来源） | ✅ 已接受 |
 | [ADR-004](arch/ADR-004-硬件档位一等配置.md) | 硬件档位一等配置 + 能力声明驱动 + 档位模拟 | ✅ 已接受 |
 | [ADR-005](arch/ADR-005-推理内嵌与异步任务.md) | 推理内嵌后端进程 + 异步任务队列 + SSE | ✅ 已接受 |
+| [ADR-006](arch/ADR-006-ORM与迁移方案.md) | ORM 与迁移方案（SQLAlchemy 2.x **同步引擎** + Alembic batch + 11 条 SQLite 适配约束） | ✅ 已接受（2026-10-08） |
 
 ---
 
