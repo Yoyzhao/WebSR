@@ -1,0 +1,150 @@
+"""系统信息与诊断组装（PRD §3.4 / api-contract §4.4）。
+
+数据来源**全部**来自引擎层（阶段 A 能力探测 + 阶段 B EP 真实性验证）：
+
+- `engine/device_probe.py` —— 纯事实（`DeviceFacts`），永不抛异常；
+- `engine/ep_verify.py` —— EP 验证结论（判据：目标 EP 节点数 > 0 且 CPU 节点数 = 0）；
+- `engine/backend_cache.py` —— 验证结果缓存（`data/calibration/`，硬件指纹失效）；
+- `engine/capabilities.py` —— 编排 + 档位判定（§6.2）。
+
+本模块只做**取数 + 组装成契约形状**，不含任何探测逻辑——
+这样"探测来源"换实现时（例如将来加 Intel 路径）本模块无需改动。
+
+**保底语义**：阶段 C（自标定）属 S2，尚未落地 → `using_fallback` 恒 true、
+`active_precision` 恒 fp32（§6.8）。诊断 JSON 满足"一键导出即可解释为什么他慢/崩"
+（跨环境设计文档 §9）。
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+
+from sqlalchemy import func, select
+
+from ..db import get_session
+from ..engine import capabilities as caps_engine
+from ..models.builtin_catalog import BUILTIN_MODELS
+from ..models.entities import Calibration, Model, Task
+from . import settings_store
+
+logger = logging.getLogger("websr.services.system_info")
+
+APP_VERSION = "0.1.0"
+
+
+def _probe_model_path() -> Path | None:
+    """EP 验证的探针模型：内置模型中第一个 `.onnx`（fp32 主路径）。
+
+    刻意用**内置模型**而不是"目录里随便一个 onnx"——验证必须在产品真正会加载的
+    模型上进行，否则验证结论与实际使用脱节。文件缺失时返回 None（引擎会退化为
+    目录扫描，再没有就跳过阶段 B，不阻断启动）。
+    """
+    root = settings_store.effective_model_dir()
+    for spec in BUILTIN_MODELS:
+        if spec.format == "onnx":
+            p = root / spec.path
+            if p.is_file():
+                return p
+    return None
+
+
+def _snapshot() -> tuple[dict, dict]:
+    """取能力快照（进程内缓存；首次调用会跑一次阶段 A/B，之后为读缓存）。"""
+    return caps_engine.get_snapshot(
+        settings_store.effective_data_root(),
+        probe_model=_probe_model_path(),
+        models_dir=settings_store.effective_model_dir(),
+    )
+
+
+def build_capabilities() -> dict:
+    """契约 `Capabilities` 形状（api-contract §4.4 / 前端 `Capabilities` 类型）。"""
+    caps, _ = _snapshot()
+    return caps
+
+
+def warmup_capabilities() -> dict:
+    """启动第 2 步（非阻塞）调用：跑一次阶段 A/B 并填充进程内缓存。
+
+    返回一个**精简摘要**（写进 `app.state.capability_report` 供日志与诊断），
+    而不是完整 capabilities——启动日志不需要把整个证据链打一遍。
+    """
+    caps, details = _snapshot()
+    return {
+        "tier": caps["tier"],
+        "tier_reason": caps["tier_reason"],
+        "adopted_backends": details.get("adopted_backends"),
+        "cache_state": details.get("cache_state"),
+        "hardware_fingerprint": details.get("hardware_fingerprint"),
+        "probes_failed": details.get("probes_failed"),
+        "probes_skipped": details.get("probes_skipped"),
+        "exception_events": details.get("exception_events"),
+    }
+
+
+def build_diagnostics() -> dict:
+    """一键诊断导出（PRD §3.4）：硬件事实 + 探测失败项 + EP 验证结果 + 标定 + 规模统计。"""
+    caps, details = _snapshot()
+
+    s = get_session()
+    try:
+        calibrations = s.scalars(select(Calibration).order_by(Calibration.created_at.desc())).all()
+        cal_records = [{
+            "id": c.id, "model_id": c.model_id,
+            "hardware_fingerprint": c.hardware_fingerprint,
+            "tile_curve": c.tile_curve, "precision_decision": c.precision_decision,
+            "recommended_tier": c.recommended_tier, "reason": c.reason,
+            "valid": c.valid, "created_at": c.created_at.isoformat() if c.created_at else None,
+        } for c in calibrations]
+        task_counts = dict(
+            s.execute(select(Task.status, func.count()).group_by(Task.status)).all()
+        )
+        model_count = s.scalar(select(func.count()).select_from(Model))
+    finally:
+        s.close()
+
+    try:
+        cal_state = settings_store.effective("calibration_state")
+    except Exception:
+        cal_state = "pending"
+
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "app_version": APP_VERSION,
+        "tier": caps["tier"],
+        "tier_label": caps["tier_label"],
+        "tier_reason": caps["tier_reason"],
+        # 契约字段（前端已消费）
+        "device_facts": caps["device_facts"],
+        "ep_evidence": caps["ep_evidence"],
+        # ↓ 诊断专用：探测细节与失败项（"一键导出即可解释为什么他慢/崩"）
+        "probe": {
+            "device_facts_raw": details.get("device_facts"),
+            "probes_failed": details.get("probes_failed"),
+            "probes_skipped": details.get("probes_skipped"),
+            "probe_ms": details.get("probe_ms"),
+            "ort_available_providers": details.get("ort_available_providers"),
+        },
+        "ep_verification": {
+            "hardware_fingerprint": details.get("hardware_fingerprint"),
+            "cache_state": details.get("cache_state"),
+            "cache_path": details.get("cache_path"),
+            "adopted_backends": details.get("adopted_backends"),
+            "backend_latency_ms": details.get("backend_latency_ms"),
+            "excluded_backends": details.get("excluded_backends"),
+            "exception_events": details.get("exception_events"),
+        },
+        "calibration": {
+            "state": cal_state,
+            "records": cal_records,
+            "note": "首启自标定属 S2（T-805），当前使用保底档（§6.8）",
+        },
+        "summary": {
+            "model_count": model_count,
+            "task_count_by_status": task_counts,
+        },
+        "using_fallback": caps["using_fallback"],
+        "active_backend": caps["active_backend"],
+        "active_precision": caps["active_precision"],
+    }

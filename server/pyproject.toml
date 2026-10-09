@@ -1,0 +1,36 @@
+[project]
+name = "websr-server"
+version = "0.1.0"
+description = "WebSR 后端（FastAPI + 进程内推理引擎；见 docs/tech/tech-arch.md）"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic-settings",
+    # ORM 与迁移按 ADR-006 实测版本固定（2026-10-08 定案）
+    "sqlalchemy==2.1.4",
+    "alembic==1.20.0",
+    "python-multipart>=0.0.32",
+    "pillow>=12.3.0",
+    "numpy>=2.5.3",
+    "onnxruntime>=1.30.0",
+]
+
+# 非打包项目：依赖安装到既有项目内环境 .venvs/sr-app（严禁全局安装，project-rules §2.1）。
+# 安装命令（在 server/ 下）：
+#   UV_PROJECT_ENVIRONMENT=<项目根>/.venvs/sr-app uv sync
+[tool.uv]
+package = false
+
+# Alembic 配置（ADR-006 约束 4：放 pyproject 而非 ini —— alembic.ini 在中文
+# Windows 上以 GBK locale 读取，UTF-8 中文注释必崩；TOML 由 tomllib 强制 UTF-8 解析）
+# DB URL 不在此硬编码（约束 6），由 migrations/env.py 经 APP_DB_URL 注入
+[tool.alembic]
+script_location = "migrations"
+prepend_sys_path = "."
+sqlalchemy.url = ""
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+]
