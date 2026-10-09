@@ -431,6 +431,32 @@
 - **兼容性**：只影响 T0 档；T1 主链路（Real-ESRGAN + CUDA）不受影响
 - **回滚/恢复**：不适用（纯验证任务，无实现可回滚）
 
+### 完成结论（2026-10-09 回填）
+
+**验收标准三选一 → ✅ 可用（比 PRD §2.3 写的"能用 / 预览"更好）。**
+
+| 判据 | 结果 |
+|---|---|
+| 获取方式 | SAFMN 作者官方权重（`hf:Meloo/SAFMN`，Apache-2.0）+ 社区 SPAN 权重（`hf:Phips/2xHFA2k_LUDVAE_SPAN`）；**官方 411K 版 SPAN 权重取不到**（作者只放 Google Drive），但实测 SPAN 的**被执行子图**正是官方规模（410,700 参数） |
+| 纯 CPU 推理（判据要求） | OpenVINO **原生** API + **fp32**（**未用** ORT + OpenVINO EP，也未用 fp16） |
+| `SAFMN ×4` 1080p 全图 | **5.13 s**（720p 1.87 s）｜单块 256² **129 ms**｜峰值内存 687 MB |
+| `SPAN ×2` 1080p 全图 | **6.43 s**（720p 1.79 s）｜单块 256² **116 ms**｜峰值内存 407 MB |
+| 与 `RealESRGAN_x4plus` 对比（判据要求） | 单块 256² 4 894 → 129 ms（**38×**）；1080p 全图 272.6 s → 5.13 s（**53×**）；内存 3 894 → 687 MB |
+| 结论可迁移的边界（判据要求） | 已写明：**单机单 CPU**（`i5-12400F`）、两个轻量模型、仅 fp32、**不含画质复核** —— 见结论文档 §7 |
+
+**产物**：`docs/tech/research/图像超分修复-T801-轻量模型CPU速度结论.md`；
+`tools/bench_t801_light_models.py`（开发期资产，产品不得 import）；
+原始数据 `.workbuddy/results/t801_light_cpu.json` / `t801_light_cpu_1080p.json`。
+
+**对 5D 的影响**：① `T0` 档**不需要** `min_ram_mb`（687 MB 峰值不构成门槛）；
+② SAFMN 类模型**只能静态输入**（`dynamo=False` 下 `adaptive_avg_pool2d` 无法导出）
+→ 走 `T-806` 的 `decide_profile(fixed_tile=N)` 通道，`multiple_of=8`；
+③ **`T0` 档需要轻量模型进 `data/models/`**（当前只有 `RealESRGAN` 系）。
+
+**遗留（不阻塞）**：① 要正式支持 SPAN ×4 族，需评估 `dynamo=True`（需 `onnxscript`）
+或按模型族分级容差——`T-807` 自检在 SPAN ×4 上报 `4.19e-03 > 1e-03` 并**正确地拒绝落盘**；
+② 低功耗笔记本 CPU 与 `SAFMN BCIE` / `PLKSR` 等同族模型未测。
+
 ---
 
 ## 阶段完成结果

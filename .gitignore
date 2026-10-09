@@ -107,3 +107,13 @@ web/*.tsbuildinfo
 # ---- 验证脚本的原始运行日志（可随时重跑生成，不入库）----
 # 保留了 `regress_*.txt`（跨任务全量回归摘要，高信噪比证据）。
 .workbuddy/verify/*_run.txt
+
+# ---- T-801 轻量模型 CPU 速度验证产物 ----
+# 三个源权重（各 ≤ 4.5 MB，共约 10 MB）**入库**作为可复现夹具（下载命令见结论文档 §8）：
+#   SAFMN_DF2K_x4.pth                  Apache-2.0  hf:Meloo/SAFMN   —— 官方轻量模型
+#   2xHFA2k_LUDVAE_SPAN.safetensors    CC-BY-4.0   hf:Phips/...     —— SPAN 架构（结构重参数化）
+#   4xNomosUni_span_multijpg.safetensors CC-BY-4.0 hf:Phips/...     —— T-807 自检拦截的证据
+# 派生物不入库：转换产物 `.onnx`（可由源权重一条命令重建）、OpenVINO IR、临时日志。
+.workbuddy/verify/t801/*.onnx
+.workbuddy/verify/t801/ir/
+.workbuddy/verify/t801/_*.log
