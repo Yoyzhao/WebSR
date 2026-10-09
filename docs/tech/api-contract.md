@@ -213,11 +213,53 @@
   },
   "companion": null,                   // .bin 必须带配套文件：[".xml"] 或 [".param"]
   "available": true,                   // 服务端按当前档位算好的可用性
-  "unavailable_reason": null           // 不可用时的原因文案
+  "unavailable_reason": null,          // 不可用时的原因文案
+  "conversion": null                   // ★ T-807 新增：仅 pth / safetensors 有值
+                                       //   { "available": bool, "reason": str|null }
 }
 ```
 
 > **`min_vram_mb` 只用于可用性门控**：跑不动的置灰，**引擎不做模型推荐**（用户 2026-09-30 决定，PRD v1.8）。
+
+**差异登记（T-807 实施产生，T-700 冻结时裁决）**
+
+- **`ModelOut` 新增 `conversion` 子对象**（`{ available: bool, reason: str | null }`），
+  **仅 `format ∈ {pth, safetensors}` 时有值**，其余格式为 `null`。理由：前端要能在**列表页**直接把
+  "需转换"与"转换环境缺失"区分开，`available=false` + `reason` 给出可照做的说明。
+  **建议冻结时正式补入 `ModelOut`（可空字段，非严格结构不破坏既有解析）。**
+- **`POST /api/models/{id}/convert` 的响应比 5D 草案更宽**（草案只写了 `{ task_id }`）：
+
+  ```jsonc
+  // 202 Accepted
+  { "started": true,  "task_id": "mdl_3", "status": "running" }
+  // 已有转换在跑（幂等，不叠加）：
+  { "started": false, "task_id": "mdl_3", "status": "running" }
+  ```
+
+  另补两个**失败码**（5D 草案未定义）：**`MODEL_NOT_CONVERTIBLE`（400）**——模型不是
+  `.pth`/`.safetensors`；**`CONVERT_ENV_MISSING`（409）**——独立转换环境不存在（附三条安装命令）。
+  口径与 T-806 一致：**"环境缺失"是状态不是异常**，用 `409` + 可照做的指引，而不是 `500`。
+- **新增 `GET /api/models/{id}/convert`**（草案没有此端点）：
+
+  ```jsonc
+  { "job_id": "mdl_1", "status": "idle|running|done|error", "model_id": "mdl_1",
+    "started_at": "…", "finished_at": "…",
+    "result": { /* 转换产物的模型摘要，含新的 model_id */ } | null,
+    "error": null,
+    "source_model_id": "mdl_1",                        // 触发转换的源模型
+    "availability": { "available": true, "reason": null } }
+  ```
+
+  ⚠️ 状态字段是**平铺**的（不套 `state` 子对象），字段语义与
+  `GET /api/system/calibration` 的 `state` 区段同构，只是未嵌套。
+  理由：转换是**数十秒级**离线作业（RRDBNet 实测），前端需要**轮询入口**；
+  `availability` 与 `ModelOut.conversion` 共用同一份 `describe_availability()`。
+- **转换产物是"新的 `.onnx` 模型"而非原模型的属性**：产物落
+  `data/models/imported/<stem>__from<id>.onnx`，并**登记为独立的 `ModelOut`**
+  （`format=onnx`、`source=imported`）；**原 `.pth` 模型保留不动**。重复触发**复用已有产物**（幂等定名约定）。
+  前端应把二者**关联展示**（"来自 mdl_x 的转换产物"），**不要**假设 `id` 相同或原模型被替换。
+- **转换的 `task_id` 与任务中心的 `task_id` 不在同一值空间**：转换作业**不落 `TASK` 表**
+  （走文件系统 + 进程内状态），故**不能**拿去调 `/api/tasks/{id}`。前端只应把它当**不透明句柄**。
 
 ### 3.3 其他
 
@@ -258,7 +300,8 @@
 |---|---|---|---|---|
 | GET | `/api/models` | 模型列表 | `?page&page_size&format` | `{ items: Model[], total, ... }`（含 `available` 与 `unavailable_reason`） |
 | POST | `/api/models/import` | 导入模型 | `multipart`（`.bin` 必须同时带 `.xml` 或 `.param`） | `Model` |
-| POST | `/api/models/{id}/convert` | 触发离线转换（`.pth`/`.safetensors` → `.onnx`） | — | `{ task_id }`（转换本身也是长任务） |
+| POST | `/api/models/{id}/convert` | 触发离线转换（`.pth`/`.safetensors` → `.onnx`，**T-807 已实现**） | — | `202` `{ started, task_id, status }`（非可转换格式 `400`；转换环境缺失 `409`） |
+| GET | `/api/models/{id}/convert` | 查询转换状态与结果（**T-807 已实现**） | — | `{ job_id, status, result, error, source_model_id, availability }`（**平铺**，不套 `state`） |
 | GET | `/api/models/{id}/export` | 导出模型 | — | 二进制 |
 | DELETE | `/api/models/{id}` | 删除模型 | — | `204` |
 

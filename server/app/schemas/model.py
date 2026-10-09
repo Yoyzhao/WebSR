@@ -21,6 +21,17 @@ class ModelCapabilities(BaseModel):
     requires_prompt: bool
 
 
+class ModelConversion(BaseModel):
+    """`.pth` / `.safetensors` 的离线转换可用性（T-807）。
+
+    非这两种格式时 `ModelOut.conversion` 为 `null`——"不需要转换"与
+    "需要但环境没装"是两回事，用一个可空对象表达而不是两个布尔。
+    """
+
+    available: bool
+    reason: str | None
+
+
 class ModelOut(BaseModel):
     id: str
     name: str
@@ -43,3 +54,5 @@ class ModelOut(BaseModel):
     # 前端类型无此字段，但列表置灰/「需先转换」提示需要状态语义；
     # 是否进契约列入 T-700 冻结核对（当前前端忽略未知字段，无破坏）
     status: str
+    # T-807：仅 .pth / .safetensors 有值；其它格式为 null
+    conversion: ModelConversion | None = None

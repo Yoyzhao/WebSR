@@ -5,8 +5,10 @@
   一致），契约草案的分页包装 `{items,total,...}` 是否启用待冻结时裁决；
 - 模型导入**不套用** `APP_MAX_UPLOAD_MB`（那是图片上传上限，67MB 的内置模型
   已超）；模型大小上限是否需要单列，待 T-700；
-- `POST /api/models/{id}/convert`（.pth/.safetensors 离线转换入口）属 S2，
-  依赖 T-806 加载器与转换工具链，本阶段不实现；
+- `POST /api/models/{id}/convert`（.pth/.safetensors 离线转换入口）**已由 T-807 实现**：
+  应用内**不捆绑 PyTorch**，转换在独立环境 `.venvs/sr-convert` 里**以子进程**完成
+  （ADR-003 方案 A）。触发为**异步**（导出实测数十秒，同步等待会顶穿前端超时），
+  故配一个 `GET` 取作业状态与结果；
 - 导出只给主文件（IR/ncnn 的配套 .bin 打包导出形式待 T-700 裁决）。
 """
 import json
@@ -20,6 +22,7 @@ from ..core.errors import AppError
 from ..db import get_session
 from ..engine.availability import probe_hardware_snapshot
 from ..schemas.model import ModelOut
+from ..services import conversion_service
 from ..services import model_registry as reg
 
 router = APIRouter(prefix="/api/models", tags=["models"])
@@ -112,6 +115,52 @@ def export_model(model_id: str) -> FileResponse:
                 "请重新导入该模型，或检查数据目录后重试", 404,
             )
         return FileResponse(path, filename=path.name, media_type="application/octet-stream")
+    finally:
+        s.close()
+
+
+@router.post("/{model_id}/convert", status_code=202)
+def convert_model(model_id: str) -> dict:
+    """触发 `.pth` / `.safetensors` → `.onnx` 的离线转换（**异步**，立即返回作业号）。
+
+    转换在独立环境里以子进程执行（ADR-003：应用内不含 torch），导出实测数十秒，
+    同步等待会顶穿前端超时——故立即返回，用 `GET` 取状态。
+    """
+    s = get_session()
+    try:
+        m = reg.get_model_or_404(s, model_id)
+        if m.format not in conversion_service.CONVERTIBLE_FORMATS:
+            raise AppError(
+                "MODEL_NOT_CONVERTIBLE", f"{m.format} 格式无需转换",
+                "转换入口只对 .pth / .safetensors 开放；其它格式直接加载或导入即可", 400,
+            )
+        result = conversion_service.trigger(m.id)
+        if not result.get("started") and result.get("code") == "convert_env_missing":
+            raise AppError(
+                "CONVERT_ENV_MISSING", "转换环境未安装，无法执行离线转换",
+                result.get("reason") or "", 409,
+            )
+        return result
+    finally:
+        s.close()
+
+
+@router.get("/{model_id}/convert")
+def convert_status(model_id: str) -> dict:
+    """转换作业状态与结果（与触发同一路径，`GET` 取状态）。
+
+    返回 `{status, job_id, model_id, started_at, finished_at, result, error, availability}`。
+    `result.model_id` 是**转换产物**登记成的新模型 id（与源模型 id 不同）。
+    """
+    s = get_session()
+    try:
+        m = reg.get_model_or_404(s, model_id)
+        state = conversion_service.serialize_state()
+        return {
+            **state,
+            "source_model_id": f"mdl_{m.id}",
+            "availability": conversion_service.describe_availability(),
+        }
     finally:
         s.close()
 

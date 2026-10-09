@@ -23,9 +23,9 @@
 | T-802 | M4 图像处理：预处理 / 分块 / overlap + feather 拼接（质量红线，须重写） | ✅ 完成（87/87，见文末） |
 | T-803 | 引擎阶段 A/B：能力探测 + **EP 真实性验证**（profile 节点归属 + 缓存） | ✅ 完成（2026-10-09，76/76 + 真机 CUDA 取证） |
 | T-804 | 引擎阶段 D/E：决策 Profile + 水位反馈与降级 + 保底档 | ✅ 完成（2026-10-09，见文末） |
-| T-805 | 引擎阶段 C：首启自标定（S2） | 进入时展开 |
+| T-805 | 引擎阶段 C：首启自标定（S2） | ✅ 完成（2026-10-09，63/63；真实 GPU 标定落库） |
 | T-806 | 模型加载器：`.onnx` / IR(`.xml`+`.bin`) / ncnn(`.param`+`.bin`) / 待转换格式 + **真实推理编排** | ✅ 完成（2026-10-09，121/121；含跨环境 IR/ncnn 真实推理复核） |
-| T-807 | `.pth`/`.safetensors` → `.onnx` 离线转换工具（依赖分离） | 进入时展开 |
+| T-807 | `.pth`/`.safetensors` → `.onnx` 离线转换工具（依赖分离） | ✅ 完成（2026-10-09，63/63 + 工具级探针 23/23；见 [§T-807](#t-807-pth--safetensors--onnx-离线转换adr-003-方案-a)） |
 | T-808 | 视频超分后端接口预留（P3，不实现管线） | 进入时展开 |
 | T-809 | 微调支持（离线形态）：数据集打包导出 + 训练脚本模板 + 回灌入口 | 进入时展开 |
 | T-901~T-910 | 档位能力与高端/专业档（P3，排在 S1/S2 之后） | 进入时展开 |
@@ -297,7 +297,7 @@ tech-arch §6.6 启动序列落地：第 1 步阻塞（迁移 → DLL 注册 →
 
 #### 范围外
 
-- `POST /api/models/{id}/convert`（.pth/.safetensors 离线转换）—— 依赖 T-806 加载器与转换工具链，S2
+- `POST /api/models/{id}/convert`（.pth/.safetensors 离线转换）—— 依赖 T-806 加载器与转换工具链，S2（**已于 T-807 实现**，见下文 `### T-807`）
 - 四格式**加载器**（T-806）；导入模型的真实元信息提取（参数量 / 动态 shape，T-806 回填）
 - IR/ncnn 配套文件的打包导出形式（待 T-700 裁决）
 - 完整硬件探测（T-803）
@@ -1355,3 +1355,101 @@ WDDM 拿不到按进程显存，只能读设备级用量。**刻意不另立一�
 
 
 
+
+---
+
+### T-807 `.pth` / `.safetensors` → `.onnx` 离线转换（ADR-003 方案 A）
+
+**任务定位**：兑现 PRD §7.5 方案 A / ADR-003 的第 1 条架构影响——**应用内不捆绑 PyTorch**，
+`.pth`/`.safetensors` 走**独立环境的离线转换**，应用只加载 `.onnx` 产物。
+它是 T-806"两格式正确拒绝并指向转换"那句话的**兑现方**：拒绝有了去处。
+
+#### 为什么不是"在应用里直接加载"
+
+ADR-003 已定案，此处只复述理由以免后人翻案：捆绑 PyTorch（+ torchvision + spandrel）
+会让依赖从 ~130 MB 级跳到 **2.5 GB 级**，启动与打包显著变重，而本应用对 `.pth` 的需求本质是
+"把自己训练的权重用起来"——**转成 ONNX 后收益相同**。代价是"不能直接拖进去用"，
+缓解手段就是本任务：**一条命令 / 一个按钮**。F-13 微调的"产物回灌"（T-809）与本任务**同构**，
+不引入第二套依赖语义。
+
+#### 交付物
+
+| 交付 | 位置 | 说明 |
+|---|---|---|
+| **离线转换工具** | `tools/convert_to_onnx.py` | 产品**不得 import**（`tools/` 是开发期资产）。CLI + `--json` 机器可读结果 |
+| **独立转换环境** | `.venvs/sr-convert` | torch **2.14.1+cpu** / torchvision 0.29.1+cpu / **spandrel 0.4.2** / onnx / onnxruntime / safetensors。**CPU 版 torch 足够**——转换不需要 GPU |
+| **应用侧转换入口** | `services/conversion_service.py` + `api/models.py` | `POST /api/models/{id}/convert`（异步，202）+ `GET /api/models/{id}/convert`（取状态与结果） |
+| **模型输出扩展** | `schemas/model.py` → `ModelOut.conversion` | 仅 `.pth`/`.safetensors` 有值；其它格式为 `null` |
+
+#### 四个关键裁决
+
+1. **架构识别交给 spandrel，认不出就报错、不猜**。ADR-003 明文："若无法识别则明确报错而非猜测"。
+   工具报 `arch_unrecognized`（退出码 3）并**附上 spandrel 注册的 42 个架构名**——报错本身要能照做。
+   另提供 `--arch` 强制指定（走同一注册表，**不自己重写网络实现**）。
+   同时提供 `spandrel.size_requirements`（`minimum` / `multiple_of` / `square`）——这是**唯一**
+   能"不靠猜"拿到窗口倍数约束的来源（`load_from_file` 返回的 descriptor 自带），与 T-806 的
+   `align` 口径衔接：**报出来作为参考值，产品侧仍按 `DEFAULT_ALIGN` 只收紧不放宽**。
+
+2. **默认导出动态 H/W**。产品侧 `model_introspect` 只看 ONNX 输入约束，**动态输入**引擎才能自由分块。
+   实测：动态导出的产物在 `64 / 97 / 101 / 128 / 155 / 192 / 200` 等尺寸（**含非 8 倍数**）全部正确输出 4×
+   → Real-ESRGAN 系（纯卷积）确实**无隐藏步长约束**。
+   `--static N` 才导出固定边长（对应产品侧 `fixed_tile` 通道）：实测固定 256 的产物喂 128 **会报错**，
+   语义清晰——产品侧要求的正是"**正好等于 N**"而非倍数关系。
+
+3. **自检通过才落盘**。导出后用 ONNXRuntime 真跑一遍并与 torch 输出比对 `max|diff|`（默认阈值 1e-3）。
+   理由写进了代码注释：**"能加载但算错"的模型比加载失败更糟**——产品侧无法识别，会静默出坏图。
+   实测两例：RRDBNet `1.55e-06`、SRVGGNetCompact `4.08e-06`。
+   配合**原子写**（`tempfile` + `os.replace`）：失败**不留半个 `.onnx`**、不留残留 `.tmp`
+   （与 `engine/pipeline.py` 的"取消不留半个文件"同源）。
+
+4. **"环境缺失"是状态不是异常**，且**登记复用 F-05 导入链**。`.venvs/sr-convert` 不存在时，
+   `POST` 返回 409 + **可照做的三条安装命令**（不是一句 ImportError）；`ModelOut.conversion.available=false`
+   带同一条说明——与 `engine/runtimes.py` 对可选后端的口径一致。
+   产物登记直接调 `model_registry.save_import()`，不另写一套入库逻辑（校验 / 定名 / 去重 / 落哈希全复用）。
+
+#### 实测事实（`scripts/test-script/verify_t807_convert.py` 与 `_t807_tool_probe.py`）
+
+```
+RealESRGAN_x4.pth        (RRDBNet / "ESRGAN"，16,697,987 参数) → 64.0 MB .onnx
+  同源自检 max|torch-onnx| = 1.55e-06；size_requirements = {minimum:2, multiple_of:1, square:false}
+realesr-general-x4v3.pth (SRVGGNetCompact，1,213,296 参数)     → 4.6 MB .onnx
+  同源自检 max|torch-onnx| = 4.08e-06
+```
+
+**与仓内既有 `data/models/RealESRGAN_x4.onnx` 的关系（务必分清）**：
+**图结构同构**——节点 1187 / 初始化器 702 / 算子直方图逐项一致（`Conv 351 / LeakyRelu 279 / Concat 276 /
+Constant 94 / Add 93 / Mul 92 / Resize 2`）、opset 17、输入输出名 `input`/`output` 也一致；
+但**权重不同源**（同输入下 `corr = 0.856`、`max|diff| = 0.23`）→ 属**同一架构的不同微调版本**，
+**不能互相替代**。工具的正确性由"**同源自检**"保证，**不由"与既有产物的相似度"保证**。
+
+**端到端闭环**：`.pth` 导入（status=`needs_convert`）→ 触发转换 → 产物落 `data/models/imported/`
+并登记为新的 `.onnx` 模型（status=`ready`）→ **产品加载器（`model_loader.load_backend`）
+真的加载它并推理出 4× 结果**，**CPU EP 与 CUDA EP 双路径均通过且结果一致**。
+重复触发**复用已有产物**（不重复导出——RRDBNet 导出实测数十秒）。
+
+#### 验证
+
+| 项 | 结果 |
+|---|---|
+| `verify_t807_convert.py`（sr-app） | **63 通过 / 0 失败 / 0 跳过**（8 段） |
+| `_t807_tool_probe.py`（**sr-convert**，跨环境） | **23 通过 / 0 失败** |
+| 全量回归 | T-602~T-609 / T-802~T-807 全绿 |
+
+**跨环境复核方法论（沿用 T-806）**：工具级失败分支（架构认不出 / 自检不通过 / 导出失败 /
+`.safetensors` 路径 / 静态导出）**需要真 torch**，因此放在 `.venvs/sr-convert` 里跑
+**工具本尊**，由主脚本以子进程调用——跑的是产品/工具实现，不是平行实现。
+反过来，主脚本在 `sr-app` 里断言 **`find_spec('torch') is None`**、**产品源码不 import torch/spandrel**、
+**产品不 import `tools/`**——依赖分离这件事**必须被断言钉住**，否则会在某次重构里悄悄失效。
+
+#### 诚实边界
+
+- **spandrel 决定支持面**：其注册表覆盖 42 个架构，超出范围的权重**一律拒绝**（这是设计，不是缺陷）；
+- **转换不改变数值**：产物精度 = 源权重精度（fp32）。`--fp16` 可导出半精度，但**CPU EP 未必能跑**，
+  自检会如实标 `skipped` 并记原因，不假装通过；
+- **`multiple_of=1` 不能推广**：Real-ESRGAN 系是纯卷积网络，实测无步长约束；
+  **窗口注意力模型（如 SwinIR）的约束读不出来**，产品侧仍按 `DEFAULT_ALIGN` 保守处理——
+  与 T-806 的"`align=1` 是**未检测到**约束，不是无约束"完全同源，**别把这条结论放大**；
+- **转换是 CPU 密集的离线动作**：RRDBNet 导出实测数十秒（构建整图 + 常量折叠），
+  故接口做成**异步作业**；同一时刻只跑一个，重复触发返回现状或复用产物；
+- **不做"自动挑架构/自动改倍数"**：模型声明的 `scale` 不在 2/3/4 之内时直接报错，
+  **不替用户改成 4**——那是替用户做决定。

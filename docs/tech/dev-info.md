@@ -112,7 +112,8 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 ├── tools/                      # 基准与探测脚本（11 个 .py，既有约定，保留）
 ├── .venvs/                     # 项目内隔离环境
 │   ├── sr-gpu / sr-ov / sr-ovep   # 基准与验证环境（不得污染）
-│   └── sr-app                  #   ★ 应用自身依赖环境 —— ✅ 已创建（2026-10-08；**不含 torch**：应用内无训练执行）
+│   ├── sr-app                  #   ★ 应用自身依赖环境 —— ✅ 已创建（2026-10-08；**不含 torch**：应用内无训练执行）
+│   └── sr-convert              #   ★ 离线转换环境（2026-10-09，T-807）—— **唯一含 torch 的环境**，仅供 `tools/convert_to_onnx.py` 使用，**产品代码不得 import**
 ├── .workbuddy/                 # 【工具链数据】非应用数据
 │   ├── results/                #   基准结果（原始 profile 在 ort_profiles/）
 │   ├── verify/                 #   5C 闭环验证证据（shots/ 截图 + scripts/ 脚本）
@@ -154,6 +155,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `.venvs/sr-ov` | 594 MB | `onnxruntime-openvino 1.24.1`、`openvino 2026.4.0`、`numpy 2.5.3` | OpenVINO **原生**路径 |
 | `.venvs/sr-ovep` | 384 MB | `onnxruntime-openvino 1.24.1`、`openvino 2025.4.1`、`numpy 2.3.5` | ORT + OpenVINO EP **配对环境**（仅用于验证 EP 行为） |
 | **`.venvs/sr-app`** | — | **FastAPI 0.142.4**、**uvicorn 0.54.0**、pydantic 2.13.5、pydantic-settings 2.15.0、**SQLAlchemy 2.1.4**、**Alembic 1.20.0**、**Pillow 12.3.0**、**numpy 2.5.3**、**`onnxruntime-gpu[cuda,cudnn] 1.30.0`**（CUDA 13 运行时）、python-multipart、httpx（dev） | ★ **应用自身依赖环境**（**不含 torch**）。2026-10-08 建立（T-303）+ 装入 Web 栈（T-601，`UV_PROJECT_ENVIRONMENT` 指向本环境 `uv sync`）；T-803 装入 CPU 版 onnxruntime；**2026-10-09 换装 GPU 版**（用户要求"GPU 环境必须要有"）——本机驱动 `CUDA UMD 13.3` 支持 CUDA 13，真机节点归属 **CUDA 1024 / CPU 0**，档位判 **T1** |
+| **`.venvs/sr-convert`** | — | `torch 2.14.1+cpu`、`torchvision 0.29.1+cpu`、`spandrel 0.4.2`、`onnx 1.23.2`、`onnxruntime 1.31.0`、`safetensors 0.8.0` | ★ **离线转换环境**（2026-10-09，T-807）—— **唯一含 torch 的环境**，仅供 `tools/convert_to_onnx.py`（`.pth`/`.safetensors` → `.onnx`）与探针使用。**转换不需要 GPU**，故装 **CPU 版 torch**（体积与依赖最小）。产品代码**不得 import** 本环境任何包 |
 
 > ⚠️ **换装 GPU 版时踩到两个会"静默回退 CPU"的坑**（2026-10-09，均已修）：
 > ① **CUDA 13 的包布局比 CUDA 12 多一层 `x86_64`**（`nvidia/cu13/bin/x86_64/*.dll`）——
@@ -167,6 +169,10 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 > （`runtimes.module_version()` 已加发行名映射）。
 
 > ⚠️ `sr-ov` 与 `sr-ovep` 的 openvino 版本**必须不同**：`onnxruntime-openvino 1.24.1` 是针对 **2025.4.1** 编译的，装 2026.4.0 会 ABI 不兼容并**静默回退 CPU**。详见 P0 报告 §5.3。
+
+> ⚠️ **依赖分离是硬约束**（T-807 起）：应用环境 `.venvs/sr-app` 内 **`find_spec('torch') is None`**，
+> `server/` 源码**不出现** `torch` / `spandrel` / `tools` 的 import（有回归断言钉住）。
+> 转换通过**子进程**调用工具完成，产物交回 F-05 导入链登记为新的 `.onnx` 模型。
 
 ### 5.2 模型资产（`data/models/`，共 294 MB）
 

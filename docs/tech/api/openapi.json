@@ -139,6 +139,94 @@
         }
       }
     },
+    "/api/models/{model_id}/convert": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Convert Model",
+        "description": "触发 `.pth` / `.safetensors` → `.onnx` 的离线转换（**异步**，立即返回作业号）。\n\n转换在独立环境里以子进程执行（ADR-003：应用内不含 torch），导出实测数十秒，\n同步等待会顶穿前端超时——故立即返回，用 `GET` 取状态。",
+        "operationId": "convert_model_api_models__model_id__convert_post",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Model Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Convert Model Api Models  Model Id  Convert Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Convert Status",
+        "description": "转换作业状态与结果（与触发同一路径，`GET` 取状态）。\n\n返回 `{status, job_id, model_id, started_at, finished_at, result, error, availability}`。\n`result.model_id` 是**转换产物**登记成的新模型 id（与源模型 id 不同）。",
+        "operationId": "convert_status_api_models__model_id__convert_get",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Model Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Convert Status Api Models  Model Id  Convert Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/models/{model_id}": {
       "delete": {
         "tags": [
@@ -972,6 +1060,32 @@
         ],
         "title": "ModelCapabilities"
       },
+      "ModelConversion": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "reason"
+        ],
+        "title": "ModelConversion",
+        "description": "`.pth` / `.safetensors` 的离线转换可用性（T-807）。\n\n非这两种格式时 `ModelOut.conversion` 为 `null`——\"不需要转换\"与\n\"需要但环境没装\"是两回事，用一个可空对象表达而不是两个布尔。"
+      },
       "ModelOut": {
         "properties": {
           "id": {
@@ -1096,6 +1210,16 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "conversion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelConversion"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

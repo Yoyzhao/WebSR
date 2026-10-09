@@ -25,7 +25,7 @@ from ..db import get_session
 from ..engine.availability import HardwareSnapshot, gate_availability
 from ..models.builtin_catalog import BUILTIN_MODELS, BuiltinModelSpec
 from ..models.entities import MODEL_FORMATS, Model
-from ..schemas.model import ModelCapabilities, ModelOut
+from ..schemas.model import ModelCapabilities, ModelConversion, ModelOut
 
 logger = logging.getLogger("websr.services.model_registry")
 
@@ -128,6 +128,13 @@ def serialize_model(m: Model, snapshot: HardwareSnapshot) -> ModelOut:
         status=m.status, min_vram_mb=m.min_vram_mb, snapshot=snapshot
     )
 
+    # 局部 import：conversion_service 反向依赖本模块，模块级 import 会成环
+    from . import conversion_service  # noqa: PLC0415
+
+    conversion = None
+    if m.format in conversion_service.CONVERTIBLE_FORMATS:
+        conversion = ModelConversion(**conversion_service.describe_availability())
+
     return ModelOut(
         id=f"{ID_PREFIX}{m.id}",
         name=m.name,
@@ -150,6 +157,7 @@ def serialize_model(m: Model, snapshot: HardwareSnapshot) -> ModelOut:
         available=available,
         unavailable_reason=reason,
         status=m.status,
+        conversion=conversion,
     )
 
 

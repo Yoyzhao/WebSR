@@ -95,3 +95,15 @@ web/*.tsbuildinfo
 # （避免为了隔离而复制 67 MB）。每次运行约 130 MB，可随时重建，不入库。
 # 注：收尾本应自行 rmtree，但环境的安全删除（trash）拦截可能使其失败而残留。
 .workbuddy/verify/t806/
+
+# ---- T-807 离线转换验证产物 ----
+# `realesr-general-x4v3.pth`（4.9 MB，SRVGGNetCompact）**入库**作为可复现的验证夹具
+# （Real-ESRGAN v0.2.5.0 官方发布，BSD-3-Clause）。
+# 大权重（67 MB RRDBNet）与全部转换产物可由夹具重跑生成，不入库；
+# 工具自检的 `*.onnx.meta.json`（< 2 KB）入库作为量化结论证据。
+.workbuddy/verify/t807/RealESRGAN_x4.pth
+.workbuddy/verify/t807/*.onnx
+
+# ---- 验证脚本的原始运行日志（可随时重跑生成，不入库）----
+# 保留了 `regress_*.txt`（跨任务全量回归摘要，高信噪比证据）。
+.workbuddy/verify/*_run.txt
