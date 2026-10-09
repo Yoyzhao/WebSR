@@ -41,7 +41,8 @@
 | 前端状态 / 路由 | **pinia 4.0.3** + **vue-router 4.6.4** | `web/package.json`（10-08 实际安装版本） |
 | 前端日期库 | **dayjs 1.11.23**（`utc` + `timezone` 插件） | 时区固定 `Asia/Shanghai`，不依赖浏览器时区 |
 | UI 主题策略 | **深色默认 → 可切浅色 → 可跟随系统**（三态并存） | T-401 定案（2026-09-30）；机制见 §10 |
-| 后端框架 | FastAPI（版本待装并回填） | — |
+| 后端框架 | **FastAPI 0.142.4** + **uvicorn 0.54.0**（starlette 1.7.0） | ✅ 2026-10-08 T-601 装入 `.venvs/sr-app` 并实测启动 |
+| 数据校验 | **pydantic 2.13.5** + **pydantic-settings 2.15.0** | 随 FastAPI；配置走 `APP_*` 前缀 |
 | ORM / 迁移 | **SQLAlchemy 2.1.4** + **Alembic 1.20.0** | ✅ 2026-10-08 装入 `.venvs/sr-app` 并实测（建表 / batch 改列 / 降级 / 幂等）。见 [ADR-006](arch/ADR-006-ORM与迁移方案.md) |
 | 数据库 | SQLite（Python 内置 `sqlite3`） | 文件路径待定，建议 `data/app.db` |
 | 推理运行时 | `onnxruntime-gpu 1.22.0` / `openvino 2026.4.0` / `onnxruntime-openvino 1.24.1` | **沿用 `.venvs/` 三个已验证环境的设计**，但应用需新建独立环境 `sr-app` |
@@ -68,19 +69,27 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 │   ├── src/                    #   源码（views / components / api / stores / types / styles）
 │   ├── package.json
 │   └── vite.config.ts
-├── server/                     # 后端（FastAPI）—— 待创建（步骤 5D）
+├── server/                     # 后端（FastAPI）—— ✅ 已创建（2026-10-08 起，T-601~T-609）
 │   ├── app/
-│   │   ├── main.py             #   FastAPI 入口
-│   │   ├── api/                #   路由（按 PRD §5 的接口分组）
-│   │   ├── core/               #   配置、日志、错误处理
-│   │   ├── engine/             #   M2 推理引擎（探测/验证/标定/决策/降级）
-│   │   ├── models/             #   SQLAlchemy 实体
-│   │   ├── schemas/            #   Pydantic DTO
-│   │   └── tasks/              #   异步任务队列与进度广播
-│   └── pyproject.toml
+│   │   ├── main.py             #   FastAPI 入口（lifespan 挂启动序列）
+│   │   ├── db.py               #   make_engine()：PRAGMA 唯一注入点（ADR-006）
+│   │   ├── api/                #   路由：models / files / tasks / events / system / settings
+│   │   ├── core/               #   配置、日志、错误处理、启动序列（lifecycle.py，4 步）
+│   │   ├── engine/             #   M2 推理引擎（runtime_env / availability）
+│   │   │                       #     阶段 A/B（T-803）：device_probe / ep_verify / backend_cache / capabilities
+│   │   │                       #     + M4 图像处理：image_ops.py（预处理/后处理）+ tiling.py（分块+羽化拼接）
+│   │   ├── models/             #   SQLAlchemy 实体（6 表，T-602）+ builtin_catalog.py（内置模型声明）
+│   │   ├── schemas/            #   Pydantic DTO（model / task / setting）
+│   │   ├── services/           #   业务服务层：model_registry / media_store / system_info / settings_store
+│   │   └── tasks/              #   broadcaster（Queue 扇出）/ executor（Protocol）/ manager（队列+工作线程）
+│   ├── migrations/             #   Alembic（env.py + versions/0001_initial.py）
+│   └── pyproject.toml          #   依赖 + [tool.alembic]（不用 ini，ADR-006 约束 4）
+├── scripts/                    # 开发期脚本（非产品代码）
+│   ├── export_openapi.py       #   导出 docs/tech/api/openapi.json（供 T-700）
+│   └── test-script/            #   逐任务验证脚本（verify_t602~t609 / t802 / t803_*.py）
 ├── data/                       # 【应用数据】运行期读写
 │   ├── models/                 #   模型文件（onnx + OpenVINO IR 子目录 ir/ + ncnn）
-│   ├── uploads/                #   用户上传原图（运行时创建）
+│   ├── uploads/                #   用户上传原图（运行时创建；旁车 .json 存元信息）
 │   ├── outputs/                #   超分/修复结果（运行时创建）
 │   ├── thumbs/                 #   预览缩略图（运行时创建）
 │   ├── calibration/            #   自标定记录与硬件指纹缓存（运行时创建）
@@ -116,9 +125,9 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | 入口 | 路径 | 状态 |
 |---|---|---|
 | 前端代码目录 | `web/` | ✅ 已创建（步骤 5C，2026-09-30） |
-| 后端代码目录 | `server/` | 待创建（步骤 5D） |
+| 后端代码目录 | `server/` | ✅ 已创建（T-601，2026-10-08）：`app/main.py` + `core/` + 占位包 |
 | 前端启动 | `npm run dev`（在 `web/`） | ✅ 可用（`http://127.0.0.1:5173`，`strictPort` 固定端口） |
-| 后端启动 | `uv run uvicorn app.main:app --reload --port 8000`（在 `server/`） | 待创建 |
+| 后端启动 | `uv run --active uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`（在 `server/`，须先 `UV_PROJECT_ENVIRONMENT=<项目根>/.venvs/sr-app uv sync`） | ✅ 可用（T-601 实测；**单 worker，禁止 `--workers`**） |
 | 前端构建 | `npm run build` | ✅ 可用（`vue-tsc -b && vite build`，实测通过） |
 | 测试命令 | 后端 `pytest`；前端 `vitest`（待步骤 8 细化） | 待创建 |
 
@@ -144,7 +153,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `.venvs/sr-gpu` | 3.1 GB | `onnxruntime-gpu 1.22.0`、`nvidia-ml-py 13.610.43`、`numpy 2.5.3`、`psutil 7.2.2` | NVIDIA 路径（**真正验证过 CUDA EP 生效**，见 P0 报告 §2） |
 | `.venvs/sr-ov` | 594 MB | `onnxruntime-openvino 1.24.1`、`openvino 2026.4.0`、`numpy 2.5.3` | OpenVINO **原生**路径 |
 | `.venvs/sr-ovep` | 384 MB | `onnxruntime-openvino 1.24.1`、`openvino 2025.4.1`、`numpy 2.3.5` | ORT + OpenVINO EP **配对环境**（仅用于验证 EP 行为） |
-| **`.venvs/sr-app`** | — | **SQLAlchemy 2.1.4**、**Alembic 1.20.0**、mako、markupsafe、typing-extensions | ★ **应用自身依赖环境**（**不含 torch**）。2026-10-08 建立；随 5D 逐步补齐 FastAPI / uvicorn / onnxruntime 等 |
+| **`.venvs/sr-app`** | — | **FastAPI 0.142.4**、**uvicorn 0.54.0**、pydantic 2.13.5、pydantic-settings 2.15.0、**SQLAlchemy 2.1.4**、**Alembic 1.20.0**、**Pillow 12.3.0**、**numpy 2.5.3**、**onnxruntime 1.30.0**（CPU 基线）、python-multipart、httpx（dev） | ★ **应用自身依赖环境**（**不含 torch**）。2026-10-08 建立（T-303）+ 装入 Web 栈（T-601，`UV_PROJECT_ENVIRONMENT` 指向本环境 `uv sync`）；T-803 装入 **CPU 版 onnxruntime**（阶段 B EP 验证与推理主路径）；**GPU 加速需部署时换装 `onnxruntime-gpu`** |
 
 > ⚠️ `sr-ov` 与 `sr-ovep` 的 openvino 版本**必须不同**：`onnxruntime-openvino 1.24.1` 是针对 **2025.4.1** 编译的，装 2026.4.0 会 ABI 不兼容并**静默回退 CPU**。详见 P0 报告 §5.3。
 
@@ -176,7 +185,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `APP_DATA_DIR` | 数据根目录，默认 `./data` | `.env.dev` | 否 |
 | `APP_DB_URL` | SQLite 连接串，默认 `sqlite:///./data/app.db` | `.env.dev` | 否 |
 | `APP_HOST` / `APP_PORT` | 后端绑定地址与端口（默认 `127.0.0.1` / `8000`） | `.env.dev` | 否 |
-| `APP_LOG_LEVEL` | 日志级别（默认 `info`） | `.env.dev` | 否 |
+| `APP_LOG_LEVEL` | 日志级别（**代码默认 `info`；`.env.dev` 实为 `debug`**） | `.env.dev` | 否 |
 | `APP_MAX_UPLOAD_MB` | 上传单文件大小上限 | `.env.dev` | 否 |
 | `APP_CORS_ORIGINS` | 允许的前端来源（本地为 `http://127.0.0.1:5173`） | `.env.dev` | 否 |
 | `HF_ENDPOINT` | 模型下载镜像源（可选） | `.env.dev` | 否 |
@@ -184,6 +193,22 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 
 > 安全约束：敏感信息只写入环境变量文件；`.env.prd` **必须**加入 `.gitignore` —— **已落实**：仓库已初始化并推送至 `https://github.com/Yoyzhao/WebSR.git`（`main`），`.gitignore` 已排除 `.env.prd`、`.venvs/`、运行期数据与前端验证产物。
 > 变量名以 `APP_` 前缀统一，避免与系统环境变量冲突。
+
+### 6.1 运行期配置覆盖（F-07，T-609 起）
+
+`SETTING` 表是**上表的运行期覆盖层**，不是第二套真源：`GET/PUT /api/settings` 只写
+**被显式改过的键**，未改动的键仍由 `APP_*`（经 `core/config.py`）提供；把某键改回默认值
+即自动删除覆盖行。
+
+| 键 | 生效时机 |
+|---|---|
+| `data_root` | 立即对**后续新建任务**生效（不迁移既有文件） |
+| `max_upload_mb` / `log_level` | 立即 |
+| `task_retention_days` | 下次启动清理时生效（启动序列第 4 步） |
+| `max_concurrency` | **已保存但尚未生效** —— 开放并发属 G-06（T-907） |
+| `simulation_enabled` | **已保存但尚未生效** —— 档位模拟属 P3（T-901） |
+| `model_dir` | **只读派生** = `<data_root>/models`（PRD §4.2），不可单独配置 |
+| `calibration_state` | **只读派生** —— 自标定属 S2（T-805），无有效记录时恒 `pending` |
 
 ---
 
