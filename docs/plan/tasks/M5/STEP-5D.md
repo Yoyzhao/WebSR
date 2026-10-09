@@ -22,7 +22,7 @@
 | T-609 | M7 系统配置（F-07，含保留策略清理）；**F-09 参数预设经核对属 S2，本轮不做**（见 §T-609） | ✅ 完成（47/47，见文末） |
 | T-802 | M4 图像处理：预处理 / 分块 / overlap + feather 拼接（质量红线，须重写） | ✅ 完成（87/87，见文末） |
 | T-803 | 引擎阶段 A/B：能力探测 + **EP 真实性验证**（profile 节点归属 + 缓存） | ✅ 完成（2026-10-09，76/76 + 真机 CUDA 取证） |
-| T-804 | 引擎阶段 D/E：决策 Profile + 水位反馈与降级 + 保底档 | 进入时展开 |
+| T-804 | 引擎阶段 D/E：决策 Profile + 水位反馈与降级 + 保底档 | ✅ 完成（2026-10-09，见文末） |
 | T-805 | 引擎阶段 C：首启自标定（S2） | 进入时展开 |
 | T-806 | 模型加载器：`.onnx` / `.bin`(IR) / `.pth` / `.safetensors`（依赖 T-210 结论） | 进入时展开 |
 | T-807 | `.pth`/`.safetensors` → `.onnx` 离线转换工具（依赖分离） | 进入时展开 |
@@ -839,4 +839,196 @@ T-608(15) / T-609(47) / T-802(87) / **T-803(76)** 全绿。
 - **多卡策略未定**：`primary_nvidia` 取第一张卡；多卡属后续任务。
 - **`ram_available_mb` 是瞬时值**：仅作展示与诊断；T0 档的输入尺寸上限应随水位动态求
   （属决策/标定，T-804/T-805）。
+
+### T-804 引擎阶段 D/E：决策 Profile + 水位反馈与降级 + 保底档
+
+#### 目标
+
+把 tech-arch §6.1 的**阶段 D（决策）**、**阶段 E（运行时反馈）**与 §6.8 的**保底档**落成产品代码，
+回答一个问题：**这次任务到底用多大的块、什么精度、哪个后端，以及在当前机器上此刻是否安全**。
+
+它不产生任何图像，也不做任何探测——输入全部来自已经就位的阶段 A（`DeviceFacts`）与
+阶段 B（已验证后端），标定位（阶段 C / T-805）尚未落地时缺口由**保底档**补上。
+
+#### 范围内
+
+- `app/engine/fallback.py` —— **保底档策略**（§6.8）：保守下界参数 + 语义规则，单一事实源
+- `app/engine/runtime_profile.py` —— **阶段 D**：`RuntimeProfile` 与 `decide_profile()`
+  （纯函数，含**因果性防御**）、`tile / overlap / feather_px` 取值规则
+- `app/engine/watermark.py` —— **阶段 E**：水位采样（VRAM/RAM）、连续高位触发降档、
+  **OOM 识别与降档链**、进程内 `WaterLevelTracker`
+- `app/services/engine_decision.py` —— 应用层组装件（读标定 / 能力快照 / 水位），
+  **引擎层保持不依赖应用层**（无 fastapi / sqlalchemy / pydantic）
+- 接线：`tasks/executor.py`（`resolved` 从硬编码换成真实决策）、`tasks/manager.py`
+  （前置水位基线 + 事后峰值记录 + **OOM 降档重试一次**）、`engine/capabilities.py`
+  （保底语义改由 `fallback.py` 单一来源）、`services/system_info.py`（诊断新增 `decision` 区段）
+- 验证：`scripts/test-script/verify_t804_engine.py`
+
+#### 范围外
+
+- **真实推理编排**（会话创建 / 逐块 infer / 真实产物落盘）→ 需模型加载器（**T-806**）就位，
+  本任务只交付**决策与降级机制**（控制面）。因此任务仍以 `StubExecutor` 的模拟块循环跑通，
+  但 `resolved` 已换成真实决策结果——**不拿"能出决策"冒充"能出图"**。
+- **阶段 C 自标定（T-805）**：本任务只定义"标定记录存在且有效时如何消费它"，
+  **不产生**标定记录（`Calibration` 表现在仍为空）。
+- **档位模拟**（`force_tier` / `force_vram`）→ **T-901**；保底档**不得**因模拟而改变语义。
+- **并发度生效** → G-06 / **T-907**。`RuntimeProfile.concurrency` 只是决策产物，
+  管理器仍按 §6.8 的保底值 1 排队，**不在此任务放开**。
+- **Intel / OpenVINO 原生路径**、多卡、视频（T-808）。
+
+#### 技术方案
+
+**1. 保底档（`fallback.py`）：每个取值必须是"下界"，且只有一处定义**
+
+| 参数 | 保底取值 | 依据 |
+|---|---|---|
+| `tile` | `FALLBACK_MIN_TILE = 64`，再按模型对齐倍数向上取整 | 见下方"为什么这个数可以硬编码" |
+| `precision` | `fp32` | §6.8：不论 GPU/CPU 一律 fp32（CPU 无 fp16 单元时 fp16 反而更慢） |
+| `backend` | "已验证列表"**首项**；列表为空时回落 `cpu` 并标记异常 | §6.8；空列表意味着 EP 验证整体未通过 |
+| `concurrency` | `1` | §6.8；动态并发属 T-907 |
+
+**为什么这个数可以硬编码**：§6.8 规则 1 允许保底档取常量，但只有两个条件同时成立才合规——
+① 它是**任何环境都不会 OOM 的下界**，不是"这台机器的最优值"；② 它**不得来自开发机实测**
+（开发机上 256/512 更快、更省时间，但那是个体最优）。因此 `64` 的定位是"结构下界"：
+必须 ≥ 模型对齐倍数（4/8），且小到足以在任何 ≥1 GB 显存的设备上安全完成单块推理。
+**开发机的实测最优点永远不会进这张表**——那是阶段 C 标定的产物（且标定属 S2）。
+
+另两条纪律直接写成代码约束：保底档**不写** `Calibration`（本模块不 import 任何模型层），
+**不写**模型元信息（`RuntimeProfile` 只作为任务快照落 `TASK.resolved`）。
+
+**2. 阶段 D（`runtime_profile.py`）：先取基线，再过因果性防御，最后叠加水位降档**
+
+```
+输入：facts(阶段A) + adopted(阶段B) + calibration(阶段C，可空) + 用户 params + align(模型对齐倍数)
+
+① 基线
+   标定有效（valid 且硬件指纹一致）→ 取标定结论，source=calibration，using_fallback=false
+   否则                            → 取保底档，  source=fallback，  using_fallback=true
+② 用户覆盖（auto=false 且字段非空）→ 覆盖基线对应项，source=user
+③ 因果性防御（**与来源无关，一律执行；每触发一条都记 downgrade**）
+   backend ∉ adopted                    → 回落 adopted[0]
+   precision == fp16 且后端非 GPU        → 降 fp32（CPU 路径铁律）
+   precision == fp16 且 GPU 无 fp16 单元 → 降 fp32（按 compute_cap 判定，不按型号）
+   tile < 下界                            → 抬到下界
+   tile 非 align 倍数                     → 向上取整到 align 倍数
+④ overlap / feather_px
+   overlap = align_down(tile / 4, align)（下界 align），feather_px = overlap
+⑤ 水位降档（阶段 E 传入的待执行降档）→ 逐条应用并记录
+⑥ degraded = (downgrades 非空)；adopted 为空时强制 using_fallback = true
+```
+
+- **为什么 overlap 取 `tile/4`**：T-802 的质量对照实验正是按 `tile=256 / overlap=64`
+  与 `tile=64 / overlap=16`（即 1:4）验证"边界峰比 63.0 → 1.3"的，**1:4 是回归验证过
+  的比例**；`feather_px = overlap` 则是 T-802 交接契约的推荐值（两块权重在重叠区互补，
+  混合严格线性）。两者都是**机制取值**，不是开发机的实测最优点。
+- **为什么 `align` 是入参而不是常量**：tile 必须满足模型自己的窗口/步长约束（SwinIR 类为 8），
+  这属**模型能力**，由 T-806 读 ONNX 输入约束后传入；本模块只给保守默认值 `8`
+  （4/8 的公倍数），**不按型号硬编码**。
+- **防御为什么不信任"来源"**：标定结论同样可能失效（换卡后指纹不符、标定在 CPU 档做的但
+  现在换成了 GPU），用户手填的参数更可能自相矛盾（CPU + fp16）。防御是**因果性**的，
+  所以无条件执行；触发即 `degraded=true`，并在界面"本次决策"里逐条可见——对应 PRD"降级必须显式"。
+- **标定记录的消费口径**（本任务只定义"怎么用"，产出属 T-805）：`tile` 取
+  `Calibration.tile_curve["recommended_tile"]`，精度取 `precision_decision`，后端取
+  `tile_curve["recommended_backend"]`，**匹配判据是 `hardware_fingerprint` 精确相等**
+  （先按 `model_id` 精确匹配，再退到通用记录 `model_id IS NULL`）。字段取不到就**留空**，
+  让决策退回保底下界——**不做任何猜测**；曲线形状由 T-805 定义，本任务不预设。
+- **"无已验证后端"与"标定有效"同时出现时谁说了算**：档位语义由**标定**裁决
+  （§6.8 表格第 2 行），`using_fallback` 保持 false；而"缺后端"这件事由 ③ 的
+  `backend` 回落（置空）+ `degraded=true` + 显式理由表达。**两件事分开说，不互相覆盖**——
+  否则会出现"有标定却声称在保底档"的自相矛盾状态。
+
+**3. 阶段 E（`watermark.py`）：水位是"这一次跑得多满"，降档是"下一次怎么办"**
+
+| 环节 | 规则 | 依据 |
+|---|---|---|
+| 采样 | 任务**前**取基线、任务后取峰值；Windows 下显存只能读设备级 `used` 增量 | P0 报告 §3.3 / tech-arch §6.7 |
+| 判定 | 连续 **2 次** > **85%** → 建议降档；单次高位不触发 | §6.1 阶段 E（机制阈值，可硬编码） |
+| 降档链 | `tile` 折半（至下界）→ 后端 GPU→CPU（若 CPU 已在 adopted）→ 耗尽即报错 | §2.2 铁律 1 明列"OOM 降档链"可硬编码 |
+| OOM 重试 | 识别到 OOM 类异常 → 降一档 → **重试一次**；再次 OOM 即 `VRAM_INSUFFICIENT` / `RAM_INSUFFICIENT` | §6.1 阶段 E |
+| 比例口径 | `ratio = max(vram_used/vram_total, ram_used/ram_total)`；显存读不到时只算内存 | **T0 档的瓶颈是物理内存不是显存**（§6.2） |
+
+- **采样"永不抛异常"**：水位是**观测**，不是判定前置。取不到值就记 `None`，
+  不能让"读不到显存"把任务搞挂——与阶段 A 同一纪律。
+- **`fp16` 不在降档链里**：降档只允许"更保守"的动作，而 fp16 在显存上是**变省**的；
+  它属于阶段 C 的**精度性价比结论**（"这块卡上 fp16 值不值"），不是压力应对手段。误把它
+  放进降档链会得到"OOM 时反而更省显存"的错误语义。
+- **降档理由必须落进 `resolved.downgrades`**：用户要能在任务详情里看到
+  "因为上一次跑满 91%，本次 tile 从 512 降到 256"。
+
+#### 验证与验收
+
+**`scripts/test-script/verify_t804_engine.py`**（跑在 `.venvs/sr-app`）
+
+- **保底档策略**：tile 下界 ≤ 所有真实档位的合理取值；`precision` 恒 fp32；
+  源码级检查其**不 import 模型层 / 不写标定**（"保底档不入标定与模型元信息"是代码约束，不是口号）。
+- **决策基线**：未标定 → `using_fallback=true`、fp32、backend=adopted[0]、tile 已对齐、
+  `overlap == feather_px == align_down(tile/4)`、reasons 非空。
+- **因果性防御（逐个走通，与"来源"无关）**：用户 fp16 + CPU 后端 → 降 fp32；
+  用户指定未验证后端 → 回落；tile < 下界 / 非对齐 → 抬升并对齐；
+  GPU 无 fp16 单元（`compute_cap < 5.3`）→ 降 fp32；GPU 有 fp16 单元 → 保留 fp16。
+  每条命中都必须产生 `degraded=true` 与一条 `downgrades` 记录。
+- **标定命中 / 失效**：构造有效且指纹一致的标定记录 → `source=calibration`、`using_fallback=false`、
+  采用标定 tile/precision；指纹不符 → 回落保底档（**失效判据是硬件指纹，不是时间**）。
+- **无已验证后端**：`adopted=[]` → 强制 `using_fallback=true`，理由写明"未通过 EP 真实性验证"，
+  不冒领任何加速。
+- **水位**：采样永不抛异常；比例口径取显存/内存的**较大者**；1 次高位不降档、
+  连续 2 次触发；降档执行后计数复位。
+- **降档链**：512→256→…→下界；到不了下界就切后端；无步可退返回 None（由调用方报错）。
+- **OOM 重试一次**：用可控假执行器让第一次抛 OOM 类异常、第二次成功 → 任务 `completed`
+  且 `resolved.downgrades` 含一条；连续两次 OOM → 任务 `failed` 且错误码为
+  `VRAM_INSUFFICIENT` / `RAM_INSUFFICIENT`。
+- **接线**：提交→执行后的 `resolved` 含 `source / overlap / feather_px / concurrency`；
+  `using_fallback=true`（阶段 C 未落地）；诊断导出新增 `decision` 与 `watermark` 区段。
+- **源码级检查**：`engine/runtime_profile.py` / `fallback.py` / `watermark.py` 不 import
+  `fastapi` / `sqlalchemy` / `pydantic`（引擎纯度），且不含设备型号字面量（ADR-004 原则 2）；
+  能力面板不再硬编码 `using_fallback` / `active_precision`（与阶段 D 同源）；管理器不再自己决定参数。
+
+**结果：`verify_t804_engine.py` 132/132 通过**，覆盖上述全部条目（含 1 处构造标定记录的
+消费路径验证与 2 处可控假执行器驱动的 OOM 分支）。
+
+**全量回归**：T-602(17) / T-603(13) / T-604(37) / T-605(24) / T-606(27) / T-607(14) /
+T-608(15) / T-609(47) / T-802(87) / T-803(76) / **T-804(132)** —— 共 **489 项断言全绿**。
+
+**真实配置冒烟**（`.venvs/sr-app` + 真实数据根 + 真实内置 ONNX 探针）：
+
+```
+启动序列 1/4~4/4 → 第 2 步：档位 T0，采用 ['CPUExecutionProvider']，缓存 hit
+能力面板：保底档=True 后端=CPUExecutionProvider 精度=fp32（来自阶段 D，非硬编码）
+真实任务：resolved = {tile:64, precision:fp32, backend:CPUExecutionProvider,
+                     using_fallback:true, degraded:false, overlap:16, source:fallback,
+                     reasons:[未标定 → 保底档；自动档说明；占位执行器未真正驱动计算]}
+诊断导出：含 decision（last + policy）与 watermark（history 1 条，consecutive_high 0）
+```
+
+#### 顺带修正（实施中发现，非本任务范围）
+
+- **并发槽被观测动作占住 → 下一个任务误收 409**：水位采样要起一次 `nvidia-smi` 子进程
+  （百毫秒级），而它原先排在终态落库之后、`_release_active` 之前。于是"任务已显示完成、
+  但提交新任务仍返回 `TASK_ALREADY_RUNNING`"——在 T-606 回归里表现为确定性失败。
+  修正：终态落库后**立即释放并发槽**，观测与广播排在其后。
+  教训是通用的：**观测动作不得占用调度位**。
+
+#### 差异登记（T-700 冻结核对）
+
+1. `TaskResolved` 新增 **`overlap` / `feather_px` / `concurrency` / `source`** 四个字段：
+   M2 编排（需 `overlap`/`feather_px` 才能驱动 M4 的 `plan_tiles` / `TileAccumulator`）
+   与"本次决策"展示（`source`）都需要它们，而 5C 冻结的 `TaskResolved` 只有
+   `tile / precision / backend / using_fallback / degraded / reasons / downgrades`。
+   建议契约补齐；前端类型为非严格结构，多字段不破坏既有解析。
+2. **降档原因里的数值是运行期真实值**（如"9120 MB / 10240 MB"），前端展示时应按字符串直出，
+   不要尝试解析成结构化数值。
+3. 诊断导出新增 `decision`（保底档策略 + 最近一次决策）与 `watermark`（水位历史）两个区段；
+   契约未定义诊断体的字段集（与 T-803 的 `probe` / `ep_verification` 同类）。
+
+#### 有意不做 / 已知限制（如实登记）
+
+- **`resolved` 是"决策结果"而不是"执行结果"**：真实推理未接入前，任务仍由 `StubExecutor`
+  跑模拟块循环，因此 `resolved` 里的 tile/精度/后端**尚未真正驱动计算**——
+  它们是引擎的决策，不是已发生的加速。**S1 闭环验收必须以真实产物为准**。
+- **`watermark` 的峰值在模拟执行器下不含真实显存压力**：只有 T-806 加载真实模型后，
+  水位数据才有"这台机器跑这个模型要多少显存"的含义。当前的验证只能证明**机制**成立。
+- **标定消费路径已实现但无真实数据**：`Calibration` 表在 S2 前恒为空，
+  因此线上永远走保底档；命中分支靠构造记录验证（脚本内），不是端到端真实链路。
+- **`align` 默认 8**：真实取值需 T-806 读 ONNX 输入约束；在此之前按公倍数保守处理。
+- **多卡 / Intel 原生路径 / 视频**仍未覆盖（同 T-803 边界）。
 

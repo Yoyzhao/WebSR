@@ -87,7 +87,14 @@
     "backend": "CUDAExecutionProvider",
     "using_fallback": true,            // 是否处于保底档
     "degraded": false,                 // 是否发生降档
-    "reasons": ["未标定，取保守下界参数"]
+    "reasons": ["未标定，取保守下界参数"],
+    // ↓ T-804（阶段 D/E）新增，**待 T-700 冻结时补入类型**（见 §3.1 差异登记）
+    "overlap": 128, "feather_px": 128, // M4 分块/羽化的实际取值
+    "concurrency": 1,                  // 决策出的并发上限（调度生效属 G-06）
+    "source": "fallback",              // calibration | user | fallback
+    "downgrades": [                    // 逐条降档证据（"降级必须显式"）
+      { "field": "tile", "from": 512, "to": 256, "reason": "连续 2 次资源水位超过 85%" }
+    ]
   },
   "error": null,                       // 失败时填入统一错误体中的 error 对象
   "created_at": "2026-09-30T11:22:33+00:00",
@@ -101,6 +108,17 @@
 
 1. **`params` 与 `resolved` 分离**：`params` 是用户的**请求值**（"自动"档时 `tile` 为 `null`）；`resolved` 是引擎的**决策结果**。界面上的「高级参数」显示 `resolved`，「本次决策」显示 `resolved.reasons`。
 2. **`status` 含 `canceling`**：协作式取消的中间态。前端据此显示「正在取消」而非「已取消」（详见 `docs/prototype/04-状态与交互定义.md` §2.5）。
+
+**差异登记（T-804 实施产生，T-700 冻结时裁决）**
+
+- 5C 冻结的 `TaskResolved` 只有 `tile / precision / backend / using_fallback / degraded / reasons /
+  downgrades`。T-804 追加 **`overlap` / `feather_px` / `concurrency` / `source`** 四项，原因是
+  M2 编排必须拿到 `overlap` / `feather_px` 才能驱动 M4 的 `plan_tiles` / `TileAccumulator`，
+  而 `source` 是界面"本次决策"解释"为什么用这个参数"的依据。前端类型为非严格结构，
+  多字段不破坏既有解析。**建议冻结时正式补入 `TaskResolved`。**
+- `downgrades[].reason` 内的数值是**运行期真实值**，前端应按字符串直出，不要解析成结构化数字。
+- 诊断导出（`/api/system/diagnostics`）新增 `decision` 与 `watermark` 区段；
+  契约未定义诊断体的字段集（与 T-803 的 `probe` / `ep_verification` 同类）。
 
 ### 3.2 Model
 
