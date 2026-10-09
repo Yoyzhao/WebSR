@@ -8,6 +8,11 @@
 2. ORT OpenVINO EP 需要 `site-packages/openvino/libs/openvino.dll`。Python 3.8
    起扩展模块依赖不再搜 PATH —— EP 加载失败时 ORT 只打一条 warning 就
    **静默回退 CPU**（project-rules §2.2 铁律 2 的成因之一）。
+3. **CUDA 13 起 `nvidia-*` wheel 多了一层架构目录**：CUDA 12 时代 DLL 直接在
+   `nvidia/<pkg>/bin/`，CUDA 13 改成 `nvidia/cu13/bin/x86_64/*.dll`（cuDNN 仍是
+   `nvidia/cudnn/bin/`）。漏掉这一层 → cudart / cublasLt 找不到，ORT 报
+   `Error loading onnxruntime_providers_cuda.dll which depends on cublasLt64_13.dll
+   which is missing` 后**静默回退 CPU**（2026-10-09 实测捕获）。
 
 **必须在 import onnxruntime / openvino 之前调用**（本模块自身不 import 任何推理库）。
 失败处理：注册失败不阻断启动，由调用方降级为仅 CPU 可用（tech-arch §6.6）。
@@ -21,6 +26,33 @@ import os
 import site
 import sys
 import sysconfig
+
+
+def _arch_dll_dirs(parent: str) -> list[str]:
+    """把 `bin/` 下再套的一层架构目录（x86_64 / amd64）也纳进来。
+
+    CUDA 12 的 `nvidia-*-cu12` wheel 把 DLL 直接放 `bin/`；**CUDA 13 起**
+    （`nvidia-cuda-runtime` / `nvidia-cublas` / `nvidia-cufft` 等）改成
+    `bin/x86_64/*.dll`。只注册外层会得到一个**不含 DLL 的空目录**，
+    最终表现为 ORT 静默回退 CPU（见模块 docstring 第 3 条）。
+
+    只返回**确实含 `.dll` 的**子目录，避免把 `include/` 之类也塞进搜索路径。
+    """
+    out: list[str] = []
+    try:
+        entries = sorted(os.listdir(parent))
+    except OSError:
+        return out
+    for name in entries:
+        sub = os.path.join(parent, name)
+        try:
+            if os.path.isdir(sub) and any(
+                f.lower().endswith(".dll") for f in os.listdir(sub)
+            ):
+                out.append(sub)
+        except OSError:
+            continue
+    return out
 
 
 def _candidate_dirs() -> list[str]:
@@ -40,6 +72,8 @@ def _candidate_dirs() -> list[str]:
                     d = os.path.join(nvidia_root, pkg, sub)
                     if os.path.isdir(d):
                         dirs.append(d)
+                        # CUDA 13 起 DLL 在 bin/<arch>/ 而非 bin/，见 _arch_dll_dirs
+                        dirs.extend(_arch_dll_dirs(d))
 
         # OpenVINO 运行时
         for sub in ("libs", ""):

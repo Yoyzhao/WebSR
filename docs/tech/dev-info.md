@@ -45,7 +45,7 @@
 | 数据校验 | **pydantic 2.13.5** + **pydantic-settings 2.15.0** | 随 FastAPI；配置走 `APP_*` 前缀 |
 | ORM / 迁移 | **SQLAlchemy 2.1.4** + **Alembic 1.20.0** | ✅ 2026-10-08 装入 `.venvs/sr-app` 并实测（建表 / batch 改列 / 降级 / 幂等）。见 [ADR-006](arch/ADR-006-ORM与迁移方案.md) |
 | 数据库 | SQLite（Python 内置 `sqlite3`） | 文件路径待定，建议 `data/app.db` |
-| 推理运行时 | `onnxruntime-gpu 1.22.0` / `openvino 2026.4.0` / `onnxruntime-openvino 1.24.1` | **沿用 `.venvs/` 三个已验证环境的设计**，但应用需新建独立环境 `sr-app` |
+| 推理运行时 | **应用环境 `onnxruntime-gpu 1.30.0`**（CUDA 13；2026-10-09 换装，真机 CUDA EP 生效）；基准环境另有 `onnxruntime-gpu 1.22.0`（CUDA 12.9）/ `openvino 2026.4.0` / `onnxruntime-openvino 1.24.1` | **沿用 `.venvs/` 三个已验证环境的设计**；应用环境 `sr-app` 独立。⚠️ 走 Python 后端是**硬约束非偏好**：EP 验真、显存采样、DLL 路径注册这些机制无法在别的语言等价复现 |
 
 
 **命令行工具可用性**
@@ -153,7 +153,18 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `.venvs/sr-gpu` | 3.1 GB | `onnxruntime-gpu 1.22.0`、`nvidia-ml-py 13.610.43`、`numpy 2.5.3`、`psutil 7.2.2` | NVIDIA 路径（**真正验证过 CUDA EP 生效**，见 P0 报告 §2） |
 | `.venvs/sr-ov` | 594 MB | `onnxruntime-openvino 1.24.1`、`openvino 2026.4.0`、`numpy 2.5.3` | OpenVINO **原生**路径 |
 | `.venvs/sr-ovep` | 384 MB | `onnxruntime-openvino 1.24.1`、`openvino 2025.4.1`、`numpy 2.3.5` | ORT + OpenVINO EP **配对环境**（仅用于验证 EP 行为） |
-| **`.venvs/sr-app`** | — | **FastAPI 0.142.4**、**uvicorn 0.54.0**、pydantic 2.13.5、pydantic-settings 2.15.0、**SQLAlchemy 2.1.4**、**Alembic 1.20.0**、**Pillow 12.3.0**、**numpy 2.5.3**、**onnxruntime 1.30.0**（CPU 基线）、python-multipart、httpx（dev） | ★ **应用自身依赖环境**（**不含 torch**）。2026-10-08 建立（T-303）+ 装入 Web 栈（T-601，`UV_PROJECT_ENVIRONMENT` 指向本环境 `uv sync`）；T-803 装入 **CPU 版 onnxruntime**（阶段 B EP 验证与推理主路径）；**GPU 加速需部署时换装 `onnxruntime-gpu`** |
+| **`.venvs/sr-app`** | — | **FastAPI 0.142.4**、**uvicorn 0.54.0**、pydantic 2.13.5、pydantic-settings 2.15.0、**SQLAlchemy 2.1.4**、**Alembic 1.20.0**、**Pillow 12.3.0**、**numpy 2.5.3**、**`onnxruntime-gpu[cuda,cudnn] 1.30.0`**（CUDA 13 运行时）、python-multipart、httpx（dev） | ★ **应用自身依赖环境**（**不含 torch**）。2026-10-08 建立（T-303）+ 装入 Web 栈（T-601，`UV_PROJECT_ENVIRONMENT` 指向本环境 `uv sync`）；T-803 装入 CPU 版 onnxruntime；**2026-10-09 换装 GPU 版**（用户要求"GPU 环境必须要有"）——本机驱动 `CUDA UMD 13.3` 支持 CUDA 13，真机节点归属 **CUDA 1024 / CPU 0**，档位判 **T1** |
+
+> ⚠️ **换装 GPU 版时踩到两个会"静默回退 CPU"的坑**（2026-10-09，均已修）：
+> ① **CUDA 13 的包布局比 CUDA 12 多一层 `x86_64`**（`nvidia/cu13/bin/x86_64/*.dll`）——
+> `runtime_env.py` 原先只扫 `nvidia/<pkg>/{bin,lib}`，**扫不到** → CUDA 运行时 DLL 未注册，
+> ORT 只打一条 warning 就回退 CPU（报 `cublasLt64_13.dll is missing (Error 126)`）。
+> ② **EP 验证缓存的指纹原先未含"可用 EP 列表"** → 换 CPU 版→GPU 版时 **ORT 版本号未变（都是 1.30.0）**，
+> 指纹相同 → 缓存**沿用旧结论**"CUDA 不可用"。教训：**缓存键必须覆盖全部会影响结论的输入**，不只是版本号。
+>
+> ⚠️ `onnxruntime` 与 `onnxruntime-gpu` 安装**同名模块**，切换时必须**先卸再装**，否则文件相互覆盖。
+> 另：`onnxruntime-gpu` 是**独立发行名**，用模块名 `onnxruntime` 查版本会 `PackageNotFoundError`
+> （`runtimes.module_version()` 已加发行名映射）。
 
 > ⚠️ `sr-ov` 与 `sr-ovep` 的 openvino 版本**必须不同**：`onnxruntime-openvino 1.24.1` 是针对 **2025.4.1** 编译的，装 2026.4.0 会 ABI 不兼容并**静默回退 CPU**。详见 P0 报告 §5.3。
 
@@ -208,7 +219,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `max_concurrency` | **已保存但尚未生效** —— 开放并发属 G-06（T-907） |
 | `simulation_enabled` | **已保存但尚未生效** —— 档位模拟属 P3（T-901） |
 | `model_dir` | **只读派生** = `<data_root>/models`（PRD §4.2），不可单独配置 |
-| `calibration_state` | **只读派生** —— 自标定属 S2（T-805），无有效记录时恒 `pending` |
+| `calibration_state` | **只读派生** = `pending` / `ready`（或 `running`）—— 自标定属 S2（T-805，**已实现并跑通**）；无有效记录时恒 `pending` |
 
 ---
 

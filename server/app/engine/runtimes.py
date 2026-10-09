@@ -27,6 +27,7 @@ from __future__ import annotations
 import importlib.metadata as importlib_metadata
 import importlib.util
 import logging
+import threading
 from dataclasses import asdict, dataclass
 
 logger = logging.getLogger("websr.engine.runtimes")
@@ -90,12 +91,44 @@ def module_available(module: str) -> bool:
         return False
 
 
+_DIST_CACHE: dict[str, tuple[str, ...]] | None = None
+_DIST_LOCK = threading.Lock()
+
+
+def _distributions_for(module_root: str) -> tuple[str, ...]:
+    """模块顶层名 → 发行包名（可能多个）。
+
+    `importlib.metadata.version()` 认的是**发行包名**，而它与模块名并不总相等：
+    `onnxruntime-gpu` 提供的模块就叫 `onnxruntime`。按模块名直接查会抛
+    `PackageNotFoundError`，诊断里就**丢了版本号**（2026-10-09 应用环境换入
+    GPU 版后暴露）。用 `packages_distributions()` 反查，首次扫描后缓存。
+    """
+    global _DIST_CACHE
+    if _DIST_CACHE is None:
+        with _DIST_LOCK:
+            if _DIST_CACHE is None:
+                try:
+                    _DIST_CACHE = {
+                        key: tuple(val)
+                        for key, val in importlib_metadata.packages_distributions().items()
+                    }
+                except Exception:  # 反查失败退回"只按模块名查"
+                    _DIST_CACHE = {}
+    return _DIST_CACHE.get(module_root, ())
+
+
 def module_version(module: str) -> str | None:
     """已安装发行包版本；查不到返回 None。**不 import 模块本体。**"""
-    try:
-        return importlib_metadata.version(module)
-    except Exception:  # PackageNotFoundError 及其它元数据异常
-        return None
+    seen: set[str] = set()
+    for name in (module, *_distributions_for(module)):
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        try:
+            return importlib_metadata.version(name)
+        except Exception:  # PackageNotFoundError 及其它元数据异常
+            continue
+    return None
 
 
 def status_for_module(module: str | None) -> RuntimeStatus:

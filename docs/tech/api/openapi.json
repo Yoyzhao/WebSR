@@ -568,6 +568,53 @@
         }
       }
     },
+    "/api/system/calibrate": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Calibrate",
+        "description": "触发一轮标定（异步）。已有作业在跑时返回当前状态而不是重复触发。",
+        "operationId": "calibrate_api_system_calibrate_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Calibrate Api System Calibrate Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/system/calibration": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Calibration",
+        "operationId": "calibration_api_system_calibration_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Calibration Api System Calibration Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/system/diagnostics": {
       "get": {
         "tags": [

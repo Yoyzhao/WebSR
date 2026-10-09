@@ -450,15 +450,23 @@ class VerificationResult:
 def hardware_fingerprint(facts: DeviceFacts) -> str:
     """硬件指纹：决定 EP 验证结果何时失效。
 
-    包含 GPU 名/驱动/显存 + ORT 版本 + CPU 名——驱动或 ORT 升级都会改变验证结论，
-    必须使缓存失效（tech-arch §6.6 硬约束 1 的另一面）。
+    包含 GPU 名/驱动/显存 + ORT 版本 + **可用 provider 集合** + CPU 名——
+    驱动、ORT 升级、**以及 ORT 分发版更换（CPU 版 ↔ GPU 版）**都会改变验证结论，
+    必须让缓存失效（tech-arch §6.6 硬约束 1 的另一面）。
+
+    ⚠️ `ort_eps` 这一项**不可省**：`onnxruntime` 与 `onnxruntime-gpu` 的**版本号完全相同**
+    （都是 1.30.0），只比版本号会让"换装 GPU 版"之后仍命中"CUDA 不可用"的旧缓存。
+    2026-10-09 实测踩到：标定因此整轮跑在 CPU 上，吞吐只有 GPU 的 1/6，
+    而界面上一切"正常"——正是 project-rules §2.2 要防的静默劣化。
     """
     gpu = facts.primary_nvidia
+    providers = ",".join(sorted(facts.ort_available_providers or [])) or "-"
     parts = [
         facts.cpu.name,
         f"nvidia={gpu.name}/drv={gpu.driver_version}/vram={gpu.vram_total_mb}" if gpu else "nvidia=-",
         f"intel={';'.join(g.full_name for g in facts.intel_gpu) or '-'}",
         f"ort={facts.ort_version or '-'}",
+        f"ort_eps={providers}",
         f"os={facts.os_name}",
     ]
     return "|".join(parts)

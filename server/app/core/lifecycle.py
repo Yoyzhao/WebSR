@@ -7,9 +7,11 @@
     - 迁移必须排在状态回收**之前**（ADR-006 约束 7：否则表尚不存在）。
 
 第 2 步（非阻塞，`schedule_startup_nonblocking`）：
-    阶段 A 能力探测 → 阶段 B EP 真实性验证 → 无有效标定时投递后台标定（阶段 C）。
-    实现属 T-803~T-805，此处只挂**调度框架**：任何失败只记日志（异常事件），
-    任务按保底档继续（tech-arch §6.8）。
+    阶段 A 能力探测 → 阶段 B EP 真实性验证 → **无有效标定时投递后台标定（阶段 C）**。
+    任何失败只记日志（异常事件），任务按保底档继续（tech-arch §6.8）。
+
+    ⚠️ 阶段 C 必须排在 A/B **之后**：标定要用的 `hardware_fingerprint` 与
+    `adopted_backends` 都产自 A/B。两者若并发，标定会拿到空指纹（结论无法失效判定）。
 """
 import asyncio
 import logging
@@ -120,15 +122,19 @@ def schedule_startup_nonblocking(app: FastAPI) -> None:
     放在事件循环里会卡住第一批请求——而这一步按 design 本就**不阻塞**。
     **任何失败只记异常事件**，任务按保底档继续执行（tech-arch §6.8）：
     探测失败 ≠ 服务不可用，只是拿不到加速。
-    阶段 C（自标定）属 S2（T-805），到位后在此追加投递。
+
+    **阶段 C（自标定，T-805）**刻意排在能力探测之后、且**不**另起 task：
+    标定要用 A/B 产出的指纹与后端列表，并发跑会拿到空指纹。
     """
 
     async def _capability_bootstrap() -> None:
+        ok = False
         try:
             from ..services import system_info  # 局部 import：避免启动早期循环依赖
 
             report = await asyncio.to_thread(system_info.warmup_capabilities)
             app.state.capability_report = report
+            ok = True
             logger.info(
                 "启动第 2 步（非阻塞）：能力探测 / EP 验证完成 → 档位 %s，采用 %s，缓存 %s%s",
                 report.get("tier"),
@@ -139,5 +145,25 @@ def schedule_startup_nonblocking(app: FastAPI) -> None:
         except Exception:
             # 第 2 步任何失败只记异常事件，不影响服务可用性（保底档兜底，§6.8）
             logger.exception("启动第 2 步（能力探测 / EP 验证）失败，将按保底档运行")
+
+        if not ok:
+            # 拿不到指纹就不投递标定：结论会带着"unknown"指纹入库，无法做失效判定
+            logger.info("启动第 2 步：能力探测失败，跳过首启标定（'自动'档保持保底档）")
+            return
+
+        try:
+            from ..services import calibration_service  # 局部 import：同上
+
+            started = await asyncio.to_thread(calibration_service.ensure_startup_calibration)
+            if started and started.get("started"):
+                logger.info(
+                    "启动第 2 步（非阻塞）：已投递首启自标定，作业 %s",
+                    started.get("task_id"),
+                )
+            else:
+                logger.info("启动第 2 步（非阻塞）：无需标定（已有匹配本机硬件的有效记录）")
+        except Exception:
+            # 标定失败只是"'自动'档升不了级"，可用性不受影响（§6.8 规则 4）
+            logger.exception("启动第 2 步（首启自标定）投递失败，'自动'档按保底档运行")
 
     app.state.capability_task = asyncio.create_task(_capability_bootstrap())

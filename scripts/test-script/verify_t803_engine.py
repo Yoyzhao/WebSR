@@ -34,6 +34,13 @@ os.environ["APP_DB_URL"] = f"sqlite:///{(DATA / 'app.db').as_posix()}"
 
 sys.path.insert(0, str(ROOT / "server"))
 
+# 必须在 import onnxruntime **之前**完成 DLL 路径注册（与产品启动序列第 2 步同一条路径）。
+# 否则 CUDA EP 会因找不到 cudart / cublasLt 而**静默回退 CPU**，本脚本就会把它误判成
+# "这台机器上 CUDA 不可用"——2026-10-09 应用环境换入 GPU 版 ORT 后正是踩了这个坑。
+from app.engine.runtime_env import prepare_dll_paths  # noqa: E402
+
+prepare_dll_paths()
+
 import numpy as np  # noqa: E402
 
 PASS = FAIL = 0
@@ -500,9 +507,21 @@ else:
     print(f"     CPU EP: {cpu_v.node_count} 节点 · 干净延迟 {cpu_v.latency_ms} ms · 总耗时 {dt:.1f}s")
     if facts.nvidia:
         cuda_v = next((v for v in res_real.verdicts if v.provider == "CUDAExecutionProvider"), None)
-        if cuda_v and not cuda_v.usable:
-            check("sr-app 无 CUDA 时如实报 ep_not_available（不冒充可用）",
-                  cuda_v.reason_code == "ep_not_available", f"got={cuda_v.reason_code}")
+        if cuda_v is None:
+            check("有 NVIDIA 卡时候选链包含 CUDA EP", False, "verdicts 里没有 CUDA")
+        elif cuda_v.usable:
+            # 2026-10-09：应用环境换入 GPU 版 ORT 后，这里由"必然不可用"变为"可能可用"。
+            # 关键判据仍是 tech-arch §6.1：**节点数 > 0 且 CPU 节点数 = 0**。
+            check("CUDA 可用时被真实采纳（节点数 > 0 且 CPU 节点 = 0）",
+                  bool(cuda_v.adopted and cuda_v.node_count > 0 and cuda_v.cpu_node_count == 0),
+                  f"adopted={cuda_v.adopted} nodes={cuda_v.node_count} "
+                  f"cpu={cuda_v.cpu_node_count} reason={cuda_v.reason_code}")
+            print(f"     CUDA EP: {cuda_v.node_count} 节点 · CPU 节点 {cuda_v.cpu_node_count} "
+                  f"· 延迟 {cuda_v.latency_ms} ms")
+        else:
+            check("CUDA 不可用时不冒充可用（不采纳 + 有明确原因码）",
+                  (not cuda_v.adopted) and bool(cuda_v.reason_code),
+                  f"adopted={cuda_v.adopted} got={cuda_v.reason_code}")
 
     # 缓存复用 + 进程内快照
     real_root = TMP / "real_root"

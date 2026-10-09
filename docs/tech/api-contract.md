@@ -159,6 +159,37 @@
   可照做的安装建议（`detail.optional = true`）。前端文案应能区分
   **"制品残缺"（硬错误）**与**"可选后端未安装"（软提示）**。
 
+**差异登记（T-805 实施产生，T-700 冻结时裁决）**
+
+- **两个标定端点的响应体比 5D 草案更宽**（草案只写了"关键响应"）：
+
+  ```jsonc
+  // POST /api/system/calibrate  → 2026-10-09 T-805
+  { "started": true, "task_id": "calib_1760012345", "status": "running" }
+  // 已有作业在跑时（幂等，不叠加）：
+  { "started": false, "reason": "已有标定在进行中",
+    "job_id": "…", "status": "running", "progress": [...], "stored": false }
+
+  // GET /api/system/calibration
+  { "records": [ { "model_id": …, "recommended_tier": "T1", "tile_curve": {...},
+                   "precision_decision": "fp32", "reason": "…", "valid": true,
+                   "created_at": "2026-10-09T…" } ],
+    "recommended_tier": "T1",          // 取**首条有效**记录，无则 null
+    "reasons": ["…"],                  // 无有效记录时是"后续走保底档"的说明，而非空数组
+    "state": { "status": "idle|running|skipped|done|error", "job_id", "started_at",
+               "finished_at", "progress": [...], "error", "stored", "skipped_reason",
+               "outcome" } }
+  ```
+
+  **`records[].valid`** 不是存储字段，而是**按当前硬件指纹现算**的判定（指纹不符即为 `false`）；
+  前端据此区分"有记录"与"记录还有效"。**`reasons` 无记录时非空**（说明为何走保底档），
+  前端不要把它当成"错误列表"。**建议冻结时把 `state` 正式写入 `GET /calibration` 契约**
+  （否则前端无法显示"标定进行中"）。
+- **标定结论是"控制面数据"而非"用户输入"**：`tile_curve` 的数值是**本机实测**，随硬件指纹失效，
+  **不得**被前端当常量缓存或写回 `params`；前端只应展示与透传。
+- **`simulation_enabled` 打开时的产出不入正式表**：`simulated: true` 的记录
+  `is_storable()` 为假，不会出现在 `records` 里——这是有意为之，不是遗漏。
+
 ### 3.2 Model
 
 ```jsonc
@@ -236,8 +267,8 @@
 | 方法 | 路径 | 用途 | 关键响应 |
 |---|---|---|---|
 | GET | `/api/system/capabilities` | 硬件探测结果 | `{ tier, device_facts: {...}, verified_backends: [...], ep_evidence: {...} }` |
-| POST | `/api/system/calibrate` | 触发自标定（**S2**） | `{ task_id }` |
-| GET | `/api/system/calibration` | 标定结果与理由（**S2**） | `{ records: [...], recommended_tier, reasons }` |
+| POST | `/api/system/calibrate` | 触发自标定（**S2**，**T-805 已实现**） | `{ started, reason?, task_id, status }`（已有作业时 `started=false` 并回现状） |
+| GET | `/api/system/calibration` | 标定结果与理由（**S2**，**T-805 已实现**） | `{ records: [...], recommended_tier, reasons, state }` |
 | GET | `/api/system/diagnostics` | 一键导出诊断 JSON（PRD §3.4） | 单个 JSON 文件（含硬件事实 + EP 验证结果 + 标定记录） |
 | GET / PUT | `/api/settings` | 读写系统配置 | `{ items: Setting[] }` / 更新后的同结构 |
 

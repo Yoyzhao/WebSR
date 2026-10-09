@@ -13,7 +13,12 @@ dependencies = [
     "python-multipart>=0.0.32",
     "pillow>=12.3.0",
     "numpy>=2.5.3",
-    "onnxruntime>=1.30.0",
+    # 推理运行时：默认用 GPU 版（2026-10-09 由 CPU 版换入）。
+    # 无 NVIDIA 卡时 onnxruntime-gpu 自带的 CPU EP 仍可用，故不构成硬依赖；
+    # [cuda,cudnn] extras 拉取 CUDA 13 运行时（nvidia-*-cu13 wheels）。
+    # ⚠️ ORT 1.30 的 CUDA 依赖是 CUDA 13（1.22 才是 CUDA 12）——换版本前先看
+    #    本机驱动支持的 CUDA UMD 版本（nvidia-smi 右上角）。
+    "onnxruntime-gpu[cuda,cudnn]>=1.30.0",
 ]
 
 # 非打包项目：依赖安装到既有项目内环境 .venvs/sr-app（严禁全局安装，project-rules §2.1）。
