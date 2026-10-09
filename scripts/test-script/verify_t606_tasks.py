@@ -40,6 +40,12 @@ from PIL import Image  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.tasks.broadcaster import broadcaster  # noqa: E402
+from app.tasks import executor as task_executor  # noqa: E402
+
+# 控制面验证不需要真实推理：显式注入 StubExecutor。
+# T-806 起生产默认执行器是 EngineExecutor（真实推理），这里换回占位执行器，
+# 让状态机 / 取消 / 并发 / 广播的验证保持离线且快（约 1.8s/任务），不依赖模型文件。
+task_executor.set_executor_factory(task_executor.StubExecutor)
 
 
 def make_png() -> bytes:
@@ -175,7 +181,8 @@ with TestClient(app) as client:
     check("详情 404 TASK_NOT_FOUND",
           r.status_code == 404 and r.json()["error"]["code"] == "TASK_NOT_FOUND")
     r = client.get(f"/api/tasks/{tid}/artifacts")
-    check("产物列表（当前为空，T-808 回填）", r.status_code == 200 and r.json() == [])
+    # 占位执行器**不产出图像**，故产物为空；真实产物链路由 verify_t806_loader.py 覆盖
+    check("产物端点可用（占位执行器不产生产物，故为空）", r.status_code == 200 and r.json() == [])
 
 print(f"\n===== 结果：{PASS} 通过 / {FAIL} 失败 =====")
 sys.exit(1 if FAIL else 0)

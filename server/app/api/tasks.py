@@ -81,6 +81,7 @@ def list_artifacts(task_id: str) -> list[ArtifactOut]:
     try:
         t = _get_task_or_404(s, task_id)
         rows = s.scalars(select(Artifact).where(Artifact.task_id == t.id)).all()
-        return [serialize_artifact(a) for a in rows]
+        execution = (t.resolved or {}).get("execution") or {}
+        return [serialize_artifact(a, execution) for a in rows]
     finally:
         s.close()

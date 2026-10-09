@@ -37,6 +37,10 @@ from PIL import Image  # noqa: E402
 
 from app.main import app  # noqa: E402
 import app.api.events as events_mod  # noqa: E402
+from app.tasks import executor as task_executor  # noqa: E402
+
+# 控制面验证不需要真实推理：显式注入 StubExecutor（T-806 起生产默认是 EngineExecutor）
+task_executor.set_executor_factory(task_executor.StubExecutor)
 
 events_mod.PING_INTERVAL_SECONDS = 0.3  # 加速心跳验证
 

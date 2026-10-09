@@ -11,10 +11,15 @@
 - `watermark.py`     —— **阶段 E** 水位反馈 / OOM 降档链 / 水位追踪器（T-804）
 - `image_ops.py`     —— **M4** 预处理 / 后处理（T-802）
 - `tiling.py`        —— **M4** 分块计划 + overlap/feather 拼接（T-802，质量红线）
+- `runtimes.py`      —— 可选运行时可用性探测（不 import 重库；T-806）
+- `model_introspect.py` —— 读 ONNX 输入约束（`align` / `fixed_tile`；T-806）
+- `model_loader.py`  —— **加载器与格式路由**：ORT / OpenVINO / ncnn 三后端（T-806）
+- `pipeline.py`      —— **M2 推理编排**：预处理 → 分块 → 逐块推理 → 拼接 → 落盘（T-806）
 
 依赖方向（tech-arch §2.2）：**M2 → M4 单向**。M4 是无状态纯算法库：不持有会话、
 不编排推理循环、不感知 EP / 档位 / 进度，一切参数由 M2 传入。
-阶段 A/B/D/E 同样不依赖应用层（无 fastapi / sqlalchemy / pydantic），
-因此可在任意 Python 环境（如 `.venvs/sr-gpu`）里独立复核真机结论；
-"标定记录从哪来、水位历史存哪"这类问题由 `services/engine_decision.py` 回答。
+阶段 A/B/D/E 与加载器、编排同样不依赖应用层（无 fastapi / sqlalchemy / pydantic），
+因此可在任意 Python 环境（如 `.venvs/sr-gpu`、`.venvs/sr-ov`、`.venvs/sr-ncnn`）里
+独立复核真机结论；"标定记录从哪来、水位历史存哪、产物落哪个目录"这类问题由
+`services/engine_decision.py` 与 `tasks/executor.py` 回答。
 """

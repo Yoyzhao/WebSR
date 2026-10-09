@@ -33,6 +33,8 @@ _PIL_FORMAT_NORMALIZE = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp", "BMP": "bm
 
 THUMB_MAX_SIDE = 512
 ID_PREFIX = "file_"
+#: 任务 id 前缀（与 `tasks/manager.py` 的对外 id 一致；此处只为拼产物目录名）
+TASK_ID_PREFIX = "tsk_"
 
 
 def uploads_dir() -> Path:
@@ -44,6 +46,24 @@ def uploads_dir() -> Path:
 
 def thumbs_dir() -> Path:
     d = settings_store.effective_data_root() / "thumbs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def outputs_dir() -> Path:
+    """任务产物根（`data/outputs/`）。T-806 起真实推理结果落在这里。"""
+    d = settings_store.effective_data_root() / "outputs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def task_outputs_dir(task_id: int) -> Path:
+    """单个任务的产物目录（`data/outputs/tsk_<id>/`），避免同名结果互相覆盖。
+
+    目录名沿用任务的**对外 id 前缀**（`tsk_`，见 `tasks/manager.py`），
+    这样磁盘目录与 API 里看到的 `tsk_12` 是同一个标识，排查时不用来回换算。
+    """
+    d = outputs_dir() / f"{TASK_ID_PREFIX}{task_id}"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

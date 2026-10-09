@@ -66,15 +66,24 @@ def parse_task_id(raw: str) -> int:
     return int(raw[len(ID_PREFIX):])
 
 
-def serialize_artifact(a: Artifact) -> ArtifactOut:
+def serialize_artifact(a: Artifact, execution: dict | None = None) -> ArtifactOut:
+    """产物序列化。
+
+    `path` 统一带 `data/` 前缀（与前端已定稿的 Mock 约定一致：
+    `data/outputs/tsk_xx/portrait_4x.png`），DB 里存的仍是相对数据根的 `outputs/...`。
+    输出产物的宽高取自任务 `resolved.execution`——产物表**不存宽高**（避免为一个派生值
+    加列做迁移），真实尺寸在推理结束时已由执行器报出。
+    """
+    exec_meta = execution or {}
+    is_output = a.kind == "output"
     return ArtifactOut(
         id=f"art_{a.id}",
         task_id=f"{ID_PREFIX}{a.task_id}",
         kind=a.kind,
-        path=a.path,
+        path=f"data/{a.path}",
         filename=Path(a.path).name,
-        width=None,
-        height=None,
+        width=exec_meta.get("output_width") if is_output else None,
+        height=exec_meta.get("output_height") if is_output else None,
         size_bytes=a.size_bytes,
         sha256=a.sha256,
         created_at=_iso(a.created_at) or "",
@@ -103,6 +112,8 @@ def serialize_task(t: Task, s: Session, runtime: dict | None = None) -> TaskOut:
         duration_ms = int((t.finished_at - t.started_at).total_seconds() * 1000)
 
     artifacts = s.scalars(select(Artifact).where(Artifact.task_id == t.id)).all()
+    # 真实执行事实（T-806）：产物尺寸由执行器写入 resolved.execution，不另读文件
+    execution = (t.resolved or {}).get("execution") or {}
 
     return TaskOut(
         id=f"{ID_PREFIX}{t.id}",
@@ -124,14 +135,14 @@ def serialize_task(t: Task, s: Session, runtime: dict | None = None) -> TaskOut:
         filename=meta.get("filename") if meta else None,
         source_width=meta.get("width") if meta else None,
         source_height=meta.get("height") if meta else None,
-        output_width=None,  # T-808 真实产物回填
-        output_height=None,
+        output_width=execution.get("output_width"),
+        output_height=execution.get("output_height"),
         duration_ms=duration_ms,
         created_at=_iso(t.created_at) or "",
         started_at=_iso(t.started_at),
         finished_at=_iso(t.finished_at),
-        artifacts=[serialize_artifact(a) for a in artifacts],
-        ep_evidence=[],  # T-807/T-808 回填
+        artifacts=[serialize_artifact(a, execution) for a in artifacts],
+        ep_evidence=[],  # 真实 EP 证据表回填属 T-700 契约定稿后的展示增强
     )
 
 
@@ -306,6 +317,7 @@ class TaskManager:
             outcome = "failed"
             failure: BaseException | None = None
             resolved: dict | None = None
+            run_result = None         # 执行事实（产物清单 / 输出尺寸），T-806 起由执行器写入
 
             while True:
                 ctx = TaskContext(
@@ -345,6 +357,7 @@ class TaskManager:
                     outcome, failure = "failed", exc
                 else:
                     outcome = "completed"
+                    run_result = ctx.result
                 break
 
             if outcome == "completed":
@@ -353,6 +366,12 @@ class TaskManager:
                 t.resolved = resolved
                 t.progress_done = t.progress_total
                 t.finished_at = _utcnow()
+                # 真实产物落库（T-806）：磁盘文件已由执行器写好，这里只登记清单与哈希
+                for art in (run_result.artifacts if run_result is not None else []):
+                    s.add(Artifact(
+                        task_id=task_id, kind=art.kind, path=art.path,
+                        sha256=art.sha256, size_bytes=art.size_bytes,
+                    ))
                 s.commit()
             elif outcome == "canceled":
                 t = s.get(Task, task_id)

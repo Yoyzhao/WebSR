@@ -393,6 +393,12 @@ from app.main import app  # noqa: E402
 from app.services import engine_decision  # noqa: E402
 from app.tasks import manager as mgr  # noqa: E402
 from app.tasks.executor import TaskCancelled  # noqa: E402
+from app.tasks import executor as task_executor  # noqa: E402
+
+# 本脚本验证的是**控制面决策与降级机制**，不需要真实推理：
+# 显式注入 StubExecutor（T-806 起生产默认是 EngineExecutor）。
+# 真实推理链路由 verify_t806_loader.py 覆盖。
+task_executor.set_executor_factory(task_executor.StubExecutor)
 
 
 def make_png() -> bytes:
@@ -458,6 +464,12 @@ with TestClient(app) as client:
           res.get("using_fallback") is True and res.get("precision") == "fp32", str(res)[:200])
     check("task.params 与 resolved 分离（params.tile 仍为 null）",
           t["params"]["tile"] is None and res.get("tile") is not None)
+    # 水位采样要起一次 nvidia-smi 子进程（百毫秒级），它排在"状态落库"之后；
+    # 因此这里必须轮询等待，不能"刚看到 completed 就断言"——否则是一条时序竞争
+    # （T-806 回归中稳定复现；水位机制本身经直连调用验证无误）。
+    _wm_deadline = time.time() + 5.0
+    while time.time() < _wm_deadline and len(engine_decision.watermark_snapshot()["history"]) < 1:
+        time.sleep(0.1)
     check("任务完成后水位已记入历史",
           len(engine_decision.watermark_snapshot()["history"]) >= 1)
 

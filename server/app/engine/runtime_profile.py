@@ -176,8 +176,18 @@ def decide_profile(
     calibration: CalibrationView | None = None,
     request: RuntimeRequest | None = None,
     align: int = DEFAULT_ALIGN,
+    fixed_tile: int | None = None,
 ) -> RuntimeProfile:
-    """执行完整决策。**永不抛异常**——任何异常输入都退化为保底档（可用性优先）。"""
+    """执行完整决策。**永不抛异常**——任何异常输入都退化为保底档（可用性优先）。
+
+    Args:
+        align: **分块边长的倍数约束**（SwinIR 类窗口倍数）。由 T-806 读模型输入约束后传入；
+            读不到硬约束时用 `DEFAULT_ALIGN` 的保守下界（读不出 ≠ 无约束，见
+            `model_introspect`）。
+        fixed_tile: **模型输入为静态尺寸**时，tile 必须**正好等于**该值（T-806 读 ONNX 发现）。
+            它**不能**用 `align` 表达：`align = 512` 会让 `overlap_for(512, 512)` 算出
+            `overlap == tile`，使 `stride = 0`，`plan_tiles` 直接报错。两者语义不同，故分开。
+    """
     req = request or RuntimeRequest()
     reasons: list[str] = []
     downgrades: list[dict] = []
@@ -269,12 +279,18 @@ def decide_profile(
             downgrades.append(_downgrade("precision", "fp16", "fp32", f"{why}，改用 fp32"))
             precision = "fp32"
 
-    tile = align_up(max(_as_int(base_tile) or 0, FALLBACK_MIN_TILE), a)
-    if tile != (base_tile or 0):
-        downgrades.append(_downgrade(
-            "tile", base_tile or 0, tile,
-            f"块尺寸必须不小于下界 {FALLBACK_MIN_TILE} 且为模型对齐倍数 {a} 的整数倍",
-        ))
+    if fixed_tile is not None and _as_int(fixed_tile) and int(fixed_tile) > 0:
+        # 模型输入为静态尺寸：tile 必须**正好等于**它（多一分少一分 ORT 都报尺寸不匹配）
+        tile = int(fixed_tile)
+        if tile != (_as_int(base_tile) or 0):
+            reasons.append(f"模型输入为固定 {tile}×{tile}，分块边长据其确定（读自 ONNX 输入约束）")
+    else:
+        tile = align_up(max(_as_int(base_tile) or 0, FALLBACK_MIN_TILE), a)
+        if tile != (base_tile or 0):
+            downgrades.append(_downgrade(
+                "tile", base_tile or 0, tile,
+                f"块尺寸必须不小于下界 {FALLBACK_MIN_TILE} 且为模型对齐倍数 {a} 的整数倍",
+            ))
 
     # ---- ④ 过渡区 -----------------------------------------------------------------
     overlap = overlap_for(tile, a)

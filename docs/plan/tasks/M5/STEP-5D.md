@@ -24,7 +24,7 @@
 | T-803 | 引擎阶段 A/B：能力探测 + **EP 真实性验证**（profile 节点归属 + 缓存） | ✅ 完成（2026-10-09，76/76 + 真机 CUDA 取证） |
 | T-804 | 引擎阶段 D/E：决策 Profile + 水位反馈与降级 + 保底档 | ✅ 完成（2026-10-09，见文末） |
 | T-805 | 引擎阶段 C：首启自标定（S2） | 进入时展开 |
-| T-806 | 模型加载器：`.onnx` / `.bin`(IR) / `.pth` / `.safetensors`（依赖 T-210 结论） | 进入时展开 |
+| T-806 | 模型加载器：`.onnx` / IR(`.xml`+`.bin`) / ncnn(`.param`+`.bin`) / 待转换格式 + **真实推理编排** | ✅ 完成（2026-10-09，121/121；含跨环境 IR/ncnn 真实推理复核） |
 | T-807 | `.pth`/`.safetensors` → `.onnx` 离线转换工具（依赖分离） | 进入时展开 |
 | T-808 | 视频超分后端接口预留（P3，不实现管线） | 进入时展开 |
 | T-809 | 微调支持（离线形态）：数据集打包导出 + 训练脚本模板 + 回灌入口 | 进入时展开 |
@@ -1030,5 +1030,228 @@ T-608(15) / T-609(47) / T-802(87) / T-803(76) / **T-804(132)** —— 共 **489 
 - **标定消费路径已实现但无真实数据**：`Calibration` 表在 S2 前恒为空，
   因此线上永远走保底档；命中分支靠构造记录验证（脚本内），不是端到端真实链路。
 - **`align` 默认 8**：真实取值需 T-806 读 ONNX 输入约束；在此之前按公倍数保守处理。
+  ✅ **已由 T-806 兑现**（`model_introspect.py` + `model_constraints()`：只收紧不放宽；
+  静态输入另走 `fixed_tile` 独立通道，见下文 §T-806）。
 - **多卡 / Intel 原生路径 / 视频**仍未覆盖（同 T-803 边界）。
+
+### T-806 模型加载器与真实推理编排
+
+#### 目标
+
+把"磁盘上的模型文件"变成"**可以 `infer()` 的后端对象**"，并把 M2 编排
+（预处理 → 分块 → 逐块推理 → 羽化拼接 → 落盘）真正接上真实推理。
+
+它兑现的是 T-804 明确挂账的那笔债：*"`resolved` 是决策结果而非执行结果……**S1 闭环验收
+必须以真实产物为准**"*。本任务完成后，任务中心产出的不再是模拟块循环，而是**磁盘上真实的、
+尺寸正确、可校验的图像文件**。
+
+#### 范围内
+
+- `app/engine/runtimes.py` —— **可选运行时探测**（不 import 重库）
+- `app/engine/model_introspect.py` —— **ONNX 输入约束读取**（兑现 T-804 的 `align` 挂账）
+- `app/engine/model_loader.py` —— **格式路由 + 三后端**（ORT / OpenVINO 原生 / ncnn）+ 失败码
+- `app/engine/pipeline.py` —— **M2 真实推理编排**（纯引擎层，不认识任何后端实现）
+- `app/engine/runtime_profile.py` —— `decide_profile()` 新增 `fixed_tile` 入参
+- `app/services/engine_decision.py` —— 新增 `model_constraints()`（读模型约束，**只收紧不放宽**）
+- `app/services/media_store.py` —— `outputs_dir()` / `task_outputs_dir(task_id)`
+- 接线：`tasks/executor.py`（新增 `EngineExecutor`，`StubExecutor` 降为测试夹具）、
+  `tasks/manager.py`（**产物落库 + 尺寸回填**）、`api/tasks.py`（产物端点带执行事实）
+- 验证：`scripts/test-script/verify_t806_loader.py` + `_t806_backend_probe.py`（跨环境探针）
+
+#### 范围外
+
+- **`.pth`/`.safetensors` 的转换工具** → **T-807**。本任务只负责"识别出来并拒绝加载"，
+  给出指向转换的 `needs_convert` 错误码——**不假装能加载**。
+- **阶段 C 自标定（T-805）**：属 S2。S1 期间依旧走保底档。
+- **批量推理 / `tile=0` 整图（G-01）**、**视频（T-808）**、**微调（T-809）**。
+- **TensorRT EP**：候选链表已含，但本任务不新增验证逻辑（沿用阶段 B 结论）。
+
+#### 技术方案
+
+**1. 格式路由（ADR-003：确定性判定，不猜）**
+
+| 扩展名 | 配套 | 后端 | 说明 |
+|---|---|---|---|
+| `.onnx` | — | ORT（CUDA / TensorRT / CPU EP） | **S1 主路径**，应用环境必备 |
+| `.xml` | `.bin` | OpenVINO 原生 API | **不走 ORT + OV EP**（实测负收益） |
+| `.param` | `.bin` | ncnn | 层覆盖失败即剔除，不影响其它格式 |
+| `.pth` / `.safetensors` | — | 拒绝加载 | 指向离线转换（T-807） |
+| 单独 `.bin` | — | 拒绝 | 导入层已拦，这里再兜一次 |
+
+判定只看**扩展名 + 配套文件**，不看文件名内容、不看文件头。
+
+**2. "未安装"必须是一种状态，而不是一个异常**
+
+`runtimes.py` 的探测走 `importlib.util.find_spec`（只查 spec，**不 import 本体**）+
+`importlib.metadata.version`（读分发元数据，**也不 import**）。理由有两条，缺一不可：
+
+- **性能**：一次 `import openvino` 是秒级、数百 MB 内存，探测不能成为启动或列表请求的瓶颈；
+- **状态语义**：openvino / ncnn 是**可选后端**，缺失不是故障。若用异常表达，调用方就得
+  到处 `try/except ImportError`，最终必然有人写成 `except Exception: 认为不可用`——
+  把真实加载失败也吞掉。返回 `RuntimeStatus(available=False, reason=..., optional=True)`
+  让"缺什么、怎么装"成为**可展示的数据**（与阶段 A 的 `probes_skipped` / `probes_failed`
+  纪律同源）。
+
+**3. 校验顺序：先问「制品完不完整」，再问「本机跑不跑得动」**
+
+```
+needs_convert → file_missing → companion_missing → runtime_missing
+```
+
+即**结构性校验先于环境性校验**。这不是随手排的，理由是"同一份残缺模型在任何机器上
+都应该得到**同一个错误码**"：
+
+- 若先报 `runtime_missing`，一台没装 openvino 的机器上**永远看不到"缺 `.bin` 配套"**——
+  而那才是用户真正要修的问题（装上运行时后依旧失败，白折腾一轮）；
+- 更实际的是：应用环境只装 CPU 版 onnxruntime，运行时前置会让 companion 分支
+  **在应用环境不可观测**，只能靠跨环境探针间接证明。
+
+这条顺序有专门的回归断言（脚本 §3「残缺制品在任何机器上同码」）钉住。
+
+**4. 输入约束：`align` 与 `fixed_tile` 是**两条通道**，不能混用**
+
+`model_introspect.py` 读 ONNX 输入形状，产物是 `InputSpec`。关键裁决：
+
+| 形态 | `source` | `align` | `fixed_tile` |
+|---|---|---|---|
+| 动态 H/W（如 SwinIR） | `dynamic` | `1`（**未检测到**约束） | `None` |
+| 静态正方形（如 512×512） | `static` | `N` | `N` |
+| 4 维以外 / 非正方形 | `unknown` | `1` | `None` |
+
+- **`align = 1` 的含义是"未检测到约束"，不是"无约束"。** 动态导出的窗口注意力模型同样
+  呈现 `[1,3,"h","w"]`，窗口倍数约束**读不出来**。因此 `model_constraints()` 的口径是
+  **只能收紧、不能放宽**：默认 `DEFAULT_ALIGN = 8`，只有读出 > 8 的约束才覆盖它。
+  若把 `align=1` 当成"无约束"直接采用，会把安全的 tile 变成非法 tile。
+- **静态输入是"正好等于"，不是"倍数关系"**，不能用 `align` 表达。动手前实测：
+  `overlap_for(512, 512)` → `raw = 128 → align_down(128, 512) = 0 < a → ov = 512`；
+  `ov >= tile` → `ov = max(512, align_down(511,512)) = 512` → **`stride = tile - overlap = 0`**
+  → `plan_tiles` 断言失败。所以 `decide_profile(fixed_tile=N)` 走**独立分支**：`tile = fixed_tile`，
+  再按 `DEFAULT_ALIGN` 重算 overlap（实测 `tile=512 → overlap=128, stride=384`）。
+
+**5. 决策精度 ≠ 模型精度：不做运行时精度转换**
+
+`profile.precision` 是**决策**，模型文件的输入 dtype 是**事实**。`load_backend` **始终按模型
+实际的输入 dtype 喂数据**（fp16 导出模型喂 fp32 会被 ORT 直接拒绝类型不匹配），并把实际
+dtype 经 `describe()["input_dtype"]` 如实报出。
+
+"决策 fp16、模型是 fp32"时**不做运行时转换**（那要改写整张图），而是由 `EngineExecutor`
+记一条显式降档；反向（模型 fp16、决策 fp32）只记说明、**不算降级**（那不是保守动作）。
+两种方向都有断言覆盖。
+
+**6. ncnn 的两个陷阱（T-210 实测踩出，实现里逐条防住）**
+
+1. `ncnn.Mat(numpy)` 把三维数组解释为 **(c,h,w)**（不是 HWC），且**借用**缓冲区不拷贝；
+   临时数组若在 `extract()` 前被 GC → **无回溯段错误（exit 139）**。
+   → `NcnnBackend.infer` 用局部变量持有 `(c,h,w)` 数据直到 `extract()` 返回，再 `np.array()`
+   拷出结果。
+2. `create_gpu_instance()` 必须与 `destroy_gpu_instance()` 配对，否则解释器退出阶段段错误
+   → `close()` 负责配对，**失败路径也配对**。
+
+**7. 控制面与真实推理解耦：显式注入点，不用环境变量**
+
+`EngineExecutor` 成为**默认**执行器后，T-606 / T-607 / T-804 三个离线快跑脚本会开始真跑推理
+（成本从 ~1.8s 变成分钟级，且依赖真实模型文件）。解决办法是源码级注入点：
+
+```python
+set_executor_factory(factory) / reset_executor_factory() / get_executor()
+```
+
+三个脚本各自显式注入 `StubExecutor`（只改脚本，不改产品默认行为）。
+
+**刻意不提供环境变量开关**，并有源码级断言钉住（`executor.py` 中不出现 `os.environ` /
+`getenv`）——线上行为不得被环境改变。
+
+**8. 执行时才发现的偏差必须显式登记**
+
+决策在任务开始前算，但有些事实只有执行时才知道。`EngineExecutor` 用三个 `_reconcile_*`
+方法逐条比对并写进 `reasons` / `downgrades`：
+
+| 方法 | 比对 | 触发时 |
+|---|---|---|
+| `_reconcile_geometry` | 决策 tile/overlap vs 模型 `input_spec.fixed_tile` | tile 被校正，记一条降档 |
+| `_reconcile_backend` | 决策 backend vs 会话真实 providers | GPU EP 未生效，记一条降档 |
+| `_reconcile_precision` | 决策 precision vs 模型实际 dtype | 见上文 §5 |
+
+这对应 PRD「**降级必须显式**」——配置漂移不静默。
+
+#### 验证与验收
+
+`verify_t806_loader.py` —— **121 通过 / 0 失败 / 0 跳过**，共 10 段：
+
+| 段 | 内容 | 要点 |
+|---|---|---|
+| 1 | 可选运行时探测 | 不 import 重库；缺 openvino/ncnn 给可照做的安装建议；pth 归因为"需转换" |
+| 2 | 格式路由（ADR-003） | 五格式 primary/companion/runtime 判定；未知格式抛 `unsupported_format` |
+| 3 | 加载失败分支 | 每条都要有**可判别的码**；含"残缺制品在任何机器上同码"的顺序回归 |
+| 4 | ONNX 输入约束 | 动态 / 静态 512 / fp16 三种真实形态；进程内缓存；读不到不抛异常 |
+| 5 | ORT 后端 | `describe` 报真实 provider 与 dtype；close 后 infer 抛 `INFERENCE_FAILED` |
+| 6 | pipeline 全链路 | 多块 / 小图单块 / 协作式取消；sha256 与尺寸双重校验 |
+| 7 | HTTP 端到端 | `EngineExecutor` 产出 **ARTIFACT**；尺寸回填；并发槽已释放 |
+| 8 | 执行时偏差登记 | 5 个合成断言（几何 / 后端 / 精度双向） |
+| 9 | 引擎纯度 | 行首锚定正则；无设备型号字面量；无环境变量开关 |
+| 10 | **跨环境复核** | 子进程在 `sr-ov` / `sr-ncnn` 里跑**产品加载器本身** |
+
+**真实产物证据**（应用环境，CPU EP）：
+
+```
+分块计划：100x80 → tile=64 overlap=16 stride=48，共 4 块（2 行 x 2 列）
+→ 输出 400x320（原图 ×4），4 块，~1.8s，std=60.31（非全黑）
+→ ARTIFACT path = data/outputs/tsk_1/...，sha256 与磁盘文件一致
+```
+
+**跨环境复核为什么必须做**：应用环境只有 CPU 版 onnxruntime，"四格式可加载"若只在
+`sr-app` 验证，只证明了两种分支会**正确报 `runtime_missing`**。因为引擎层纯净
+（不 import fastapi / sqlalchemy / pydantic），可以用**子进程**在 `sr-ov` / `sr-ncnn` 里
+跑**产品加载器本身**——验证的是产品实现，而不是另写一份平行实现。结果：
+
+- `【sr-ov】` IR 全链路 **4/4 PASS**（`kind=openvino`、尺寸 = 原图 ×4、非全黑、尺寸读回一致）
+- `【sr-ncnn】` **3/3 PASS**（输出形状 = 输入 ×4、非全黑、无 NaN，T-210 结论复现）
+
+**全量回归**：T-602(17) / T-603(13) / T-604(37) / T-605(24) / T-606(27) / T-607(14) /
+T-608(15) / T-609(47) / T-802(87) / T-803(76) / T-804(132) / **T-806(121)** = **610 项断言全绿**。
+
+#### 顺带修正（实施中发现，非本任务范围）
+
+1. **三个既有验证脚本改为显式注入 `StubExecutor`**（T-606 / T-607 / T-804）：默认执行器
+   换成真实推理后，它们会开始真跑模型。这是"控制面验证不该被数据面绑架"的落地。
+2. **T-804 脚本的时序竞争（1/132 偶发失败）**：`[FAIL] 任务完成后水位已记入历史`。根因是
+   任务状态先落 `completed`，水位采样（起 `nvidia-smi` 子进程，百毫秒级）在其后，脚本却
+   立刻断言——与 T-804 修过的那处竞态**同源**。修正：脚本改为**轮询等待（≤5s）**。
+   直连调用 `sample_water_level()` + `tracker.record()` 已先行证明机制本身正常。
+3. **T-606 脚本的过时文案**：产物列表断言原写"当前为空，T-808 回填"，改为
+   "产物端点可用（占位执行器不产生产物，故为空）"——执行器语义变了，注释要跟上。
+
+#### 差异登记（T-700 冻结核对）
+
+1. **`TaskOut.output_width` / `output_height` 由"恒为 null 的占位"变为"真实回填"**：
+   字段在 5C 就已在 schema 中，本任务起才有值。**类型无需改动**，但契约应写明其来源
+   （取自 `resolved.execution`）与时机（任务进入终态后）。
+2. **`resolved` 新增 `execution` 子对象**：记录**执行事实**（`output_width` / `output_height` /
+   `tiles` / `elapsed_ms` / `backend` / `sha256` / `size_bytes`）。与 `resolved` 顶层的
+   **决策事实**（`tile` / `precision` / `backend` / `downgrades`）刻意分开——**决策与执行不同源，
+   混在一层会让人误以为"决策即事实"**（这正是 T-804 那条挂账的教训）。
+3. **`ArtifactOut.path` 带 `data/` 前缀**：DB 里存相对数据根的 `outputs/tsk_<id>/...`，
+   对外统一输出 `data/outputs/...`，与前端已定稿的 Mock 约定一致。
+   配套：产物宽高取自 `resolved.execution`，**产物表不加宽高列**（避免为一个派生值做迁移）。
+4. **`ep_evidence` 仍为空数组**：真实 EP 证据表回填属 **T-700 展示增强**。
+
+#### 有意不做 / 已知限制（如实登记）
+
+- **`.venvs/sr-app` 装的是 CPU 版 onnxruntime**，因此应用环境**跑不出 GPU 加速**。
+  这是**部署决定**而非代码问题（T-803 既定口径）：需要 CPU 基线可选装 `onnxruntime`，
+  需要 CUDA 则换 `onnxruntime-gpu`。本任务的验证结论是"**加载器与编排正确**"，
+  不是"**这台机器已加速**"。
+- **`resolved.execution.backend` 在应用环境恒为 CPU**：如实反映环境，不冒领 GPU。
+- **`.pth`/`.safetensors` 只是"被正确拒绝"**，不是"可加载"——任务池里"四格式可加载"的
+  原始措辞按切片修正为：**三格式可加载（onnx / IR / ncnn）+ 两格式正确拒绝并指向转换**。
+  依据 PRD §2.7：`.bin`/`.pth`/`.safetensors` 与离线转换属 **S2**，而 S1 只含 `.onnx` 主路径；
+  且"S2 项的失败不得影响 S1 主链路"。
+- **ncnn 属"条件支持"**：剩余条件是**具体模型的层覆盖需运行时校验**（加载失败即剔除），
+  不是"后端能不能跑"（T-210 已关）。
+- **推理仍在中并发 1 的工作线程内**：真实负载下的资源争抢（与 API 争抢 CPU/内存）
+  待后续在真实长任务上观察；P3 与实验性后端的独立子进程形态（ADR-005）未实现。
+- ⚠️ **本任务证明的是"能出图"，不是"出得好看"**：验证用的是**合成图与基准模型**（尺寸、非全黑、
+  非常量、sha256 一致），**人眼质量复核（真实照片"无可见接缝"）尚未做**——它属 **S1 闭环验收**
+  （T-802 交接时就写明"真实图像人眼验收属 S1 闭环"）。**不要把本任务的"121/121"读成"画质已验收"。**
+
 

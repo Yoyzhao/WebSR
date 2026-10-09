@@ -42,6 +42,40 @@ _last: dict | None = None
 # 阶段 D 决策
 # ---------------------------------------------------------------------------
 
+def model_constraints(model: Model | None) -> tuple[int, int | None, str | None]:
+    """读模型真实的输入约束 → `(align, fixed_tile, 说明)`（**T-806 兑现 T-804 的挂账**）。
+
+    取值口径（**只收紧、不放宽**）：读到静态硬约束就服从它，否则保留 `DEFAULT_ALIGN`
+    的保守下界。`model_introspect` 在动态输入下给出的 `align=1` 含义是"**未检测到**约束"，
+    不是"无约束"——直接采用会把一个本来安全的 tile 变成非法尺寸（窗口注意力模型同样
+    导出为动态 H/W）。
+
+    `fixed_tile` 与 `align` **必须分开**：`align` 是"tile 需为其整数倍"（还参与 overlap
+    对齐），而静态输入要求的是"tile 必须正好等于它"。把后者塞进 `align` 会让
+    `overlap_for(512, 512)` 得出 `overlap == tile`，`stride` 退化为 0。
+
+    **永不抛异常**：任何失败都回落保守默认值（读约束不该成为任务失败的原因）。
+    """
+    default: tuple[int, int | None, str | None] = (DEFAULT_ALIGN, None, None)
+    if model is None or model.format != "onnx":
+        return default
+    try:
+        from ..engine import model_introspect  # 局部 import：仅 onnx 路径需要
+        from . import model_registry
+
+        spec = model_introspect.spec_for_path(model_registry.models_dir() / model.path)
+    except Exception as exc:
+        logger.debug("读取模型输入约束失败，按保守默认对齐处理：%s", exc)
+        return default
+
+    if spec.fixed_tile:
+        n = int(spec.fixed_tile)
+        return DEFAULT_ALIGN, n, f"模型输入为固定 {n}×{n}，分块边长据其确定（读自 ONNX 输入约束）"
+    if spec.align and spec.align > DEFAULT_ALIGN:
+        return int(spec.align), None, f"模型输入对齐倍数为 {spec.align}（读自 ONNX 输入约束）"
+    return default
+
+
 def decide_for_task(params: dict | None, model: Model | None) -> RuntimeProfile:
     """为一个任务做决策（阶段 D + 阶段 E 的降档叠加）。**永不抛异常**。
 
@@ -55,15 +89,19 @@ def decide_for_task(params: dict | None, model: Model | None) -> RuntimeProfile:
         fingerprint = details.get("hardware_fingerprint")
         adopted = list(details.get("adopted_backends") or [])
         cal = system_info.read_calibration_view(fingerprint, model.id if model else None)
+        align, fixed_tile, constraint_note = model_constraints(model)
         profile = decide_profile(
             facts=facts,
             adopted=adopted,
             fingerprint=fingerprint,
             calibration=cal,
             request=RuntimeRequest.from_params(params),
-            align=DEFAULT_ALIGN,  # 真实对齐倍数随 T-806 读 ONNX 输入约束后传入
+            align=align,  # T-806：由 ONNX 输入约束求真实值，取不到则保守默认
+            fixed_tile=fixed_tile,
         )
-        profile = _apply_water_level_downgrade(profile, adopted=adopted)
+        if constraint_note and constraint_note not in profile.reasons:
+            profile.reasons.append(constraint_note)
+        profile = _apply_water_level_downgrade(profile, adopted=adopted, align=align)
         _remember(profile, caps.get("tier"))
         return profile
     except Exception as exc:
@@ -83,7 +121,9 @@ def decide_for_task(params: dict | None, model: Model | None) -> RuntimeProfile:
         return degraded
 
 
-def _apply_water_level_downgrade(profile: RuntimeProfile, *, adopted: list[str]) -> RuntimeProfile:
+def _apply_water_level_downgrade(
+    profile: RuntimeProfile, *, adopted: list[str], align: int = DEFAULT_ALIGN
+) -> RuntimeProfile:
     """阶段 E：**连续高位**时在本次决策上先降一档（§6.1：连续 2 次 > 85% 降档）。"""
     tr = watermark.get_tracker()
     if not tr.should_downgrade():
@@ -93,7 +133,7 @@ def _apply_water_level_downgrade(profile: RuntimeProfile, *, adopted: list[str])
         "（阶段 E 反馈）"
     )
     changes, record = watermark.next_downgrade(
-        profile.params(), adopted=adopted, align=DEFAULT_ALIGN, cause=cause
+        profile.params(), adopted=adopted, align=align, cause=cause
     )
     if not changes:
         profile.reasons.append(f"{cause}，但已到下界（无可再降的档位）")

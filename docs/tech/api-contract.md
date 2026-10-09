@@ -94,7 +94,14 @@
     "source": "fallback",              // calibration | user | fallback
     "downgrades": [                    // 逐条降档证据（"降级必须显式"）
       { "field": "tile", "from": 512, "to": 256, "reason": "连续 2 次资源水位超过 85%" }
-    ]
+    ],
+    // ↓ T-806（真实推理）新增：**执行事实**（与上面的"决策事实"刻意分层），
+    //   仅 completed 态有值。**待 T-700 冻结时补入类型**（见 §3.1 差异登记）
+    "execution": {
+      "output_width": 400, "output_height": 320,
+      "tiles": 4, "scale": 4, "elapsed_ms": 1823,
+      "sha256": "9f3c…", "size_bytes": 21491, "backend": "onnxruntime-cpu"
+    }
   },
   "error": null,                       // 失败时填入统一错误体中的 error 对象
   "created_at": "2026-09-30T11:22:33+00:00",
@@ -119,6 +126,38 @@
 - `downgrades[].reason` 内的数值是**运行期真实值**，前端应按字符串直出，不要解析成结构化数字。
 - 诊断导出（`/api/system/diagnostics`）新增 `decision` 与 `watermark` 区段；
   契约未定义诊断体的字段集（与 T-803 的 `probe` / `ep_verification` 同类）。
+
+**差异登记（T-806 实施产生，T-700 冻结时裁决）**
+
+- **`resolved` 新增 `execution` 子对象**——记录**执行事实**而非决策事实：
+
+  ```jsonc
+  "resolved": {
+    "tile": 64, "precision": "fp32", "backend": "CPUExecutionProvider",   // ← 决策
+    "execution": {                                                        // ← 实际发生
+      "output_width": 400, "output_height": 320,
+      "source_width": 100, "source_height": 80,
+      "tiles": 4, "scale": 4, "elapsed_ms": 1823,
+      "size_bytes": 21491, "sha256": "9f3c…", "backend": "onnxruntime-cpu"
+    }
+  }
+  ```
+
+  刻意**不把执行结果拍平到 `resolved` 顶层**：T-804 的教训正是"决策与事实混在一层，
+  会让人误以为决策即事实"。建议冻结时为 `TaskResolved` 增加 `execution` 字段（可空，
+  仅 `completed` 态有值）。
+- **`TaskOut.output_width` / `output_height` 由"恒为 null 的占位"变为"真实回填"**：
+  字段 5C 就已存在，T-806 起才有值，**类型无需改动**，但应在契约中写明其**来源**
+  （取自 `resolved.execution`）与**时机**（任务进入终态后）。
+- **`ArtifactOut.path` 带 `data/` 前缀**：DB 存相对数据根的 `outputs/tsk_<id>/…`，
+  对外统一输出 `data/outputs/…`（与 5C 前端已定稿的 Mock 约定一致）。
+- **`ArtifactOut.width` / `height` 仅对 `kind=output` 有值**，取自 `resolved.execution`；
+  **产物表不加宽高列**（避免为一个派生值做迁移）。缩略图 / 对比图等其它 kind 为 `null`。
+- **`ep_evidence` 仍为空数组**：真实 EP 证据表回填属 **T-700 展示增强**，本任务未做。
+- **失败语义补充**（模型侧）：`.pth` / `.safetensors` 会被拒绝并给出 `needs_convert`
+  提示"需离线转换为 ONNX"；可选后端（openvino / ncnn）未安装时给出 `runtime_missing` +
+  可照做的安装建议（`detail.optional = true`）。前端文案应能区分
+  **"制品残缺"（硬错误）**与**"可选后端未安装"（软提示）**。
 
 ### 3.2 Model
 
