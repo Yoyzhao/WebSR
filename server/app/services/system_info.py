@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 
 from ..db import get_session
 from ..engine import capabilities as caps_engine
+from ..engine.runtime_profile import CalibrationView
 from ..models.builtin_catalog import BUILTIN_MODELS
 from ..models.entities import Calibration, Model, Task
 from . import settings_store
@@ -33,7 +34,7 @@ logger = logging.getLogger("websr.services.system_info")
 APP_VERSION = "0.1.0"
 
 
-def _probe_model_path() -> Path | None:
+def probe_model_path() -> Path | None:
     """EP 验证的探针模型：内置模型中第一个 `.onnx`（fp32 主路径）。
 
     刻意用**内置模型**而不是"目录里随便一个 onnx"——验证必须在产品真正会加载的
@@ -49,13 +50,73 @@ def _probe_model_path() -> Path | None:
     return None
 
 
+def read_calibration_view(
+    fingerprint: str | None, model_id: int | None = None
+) -> CalibrationView | None:
+    """按硬件指纹取标定结论（阶段 C 的消费侧，**T-804 只读不写**）。
+
+    匹配规则：先精确匹配 `model_id`，再退到"通用记录"（`model_id is NULL`）。
+    **指纹不符的完全不看**——失效判据是硬件指纹，不是时间（与 EP 缓存同一纪律）。
+    表在 S2 前恒为空，故当前线上永远返回 None → 走保底档。
+    """
+    if not fingerprint:
+        return None
+    try:
+        s = get_session()
+        try:
+            rows = s.scalars(
+                select(Calibration)
+                .where(Calibration.valid.is_(True))
+                .order_by(Calibration.created_at.desc())
+            ).all()
+        finally:
+            s.close()
+    except Exception as exc:  # 读不到标定不是故障：回落保底档即可
+        logger.debug("标定记录读取失败，按未标定处理: %s", exc)
+        return None
+
+    row = next(
+        (c for c in rows if c.hardware_fingerprint == fingerprint and c.model_id == model_id),
+        None,
+    ) or next(
+        (c for c in rows if c.hardware_fingerprint == fingerprint and c.model_id is None),
+        None,
+    )
+    if row is None:
+        return None
+
+    # ↓ 消费口径：曲线里**显式给出的**推荐块尺寸（T-805 负责产出该字段）。
+    #   不做任何猜测——取不到就留空，让决策退回保底下界（保守方向）。
+    curve = row.tile_curve if isinstance(row.tile_curve, dict) else {}
+    return CalibrationView(
+        hardware_fingerprint=row.hardware_fingerprint,
+        tile=curve.get("recommended_tile"),
+        precision=row.precision_decision,
+        backend=curve.get("recommended_backend"),
+        concurrency=curve.get("concurrency"),
+        reason=row.reason,
+        valid=bool(row.valid),
+    )
+
+
 def _snapshot() -> tuple[dict, dict]:
     """取能力快照（进程内缓存；首次调用会跑一次阶段 A/B，之后为读缓存）。"""
     return caps_engine.get_snapshot(
         settings_store.effective_data_root(),
-        probe_model=_probe_model_path(),
+        probe_model=probe_model_path(),
         models_dir=settings_store.effective_model_dir(),
+        # 引擎层不读库：把"指纹 → 标定结论"的取数交给应用层
+        calibration_provider=read_calibration_view,
     )
+
+
+def get_capability_snapshot() -> tuple[dict, dict]:
+    """公开入口：应用层其他模块（阶段 D 决策，T-804）取同一份能力快照。
+
+    走同一条缓存路径是**必须**的——否则会出现"启动时用内置模型做探针验证过、
+    任务期又用目录扫描重验一次"的两套结论。
+    """
+    return _snapshot()
 
 
 def build_capabilities() -> dict:
@@ -109,6 +170,21 @@ def build_diagnostics() -> dict:
     except Exception:
         cal_state = "pending"
 
+    # 阶段 D/E（T-804）：最近一次决策 + 水位历史 + 降档链策略。
+    # 局部 import 是必要的——`engine_decision` 依赖本模块取能力快照，
+    # 模块级互相 import 会成环；诊断导出本身也**绝不能**因为它的异常而失败。
+    try:
+        from . import engine_decision
+
+        decision = {
+            "last": engine_decision.last_decision(),
+            "policy": engine_decision.decision_policy(),
+        }
+        watermark_info = engine_decision.watermark_snapshot()
+    except Exception as exc:
+        decision = {"error": f"{type(exc).__name__}: {exc}"}
+        watermark_info = {"error": f"{type(exc).__name__}: {exc}"}
+
     return {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "app_version": APP_VERSION,
@@ -140,6 +216,9 @@ def build_diagnostics() -> dict:
             "records": cal_records,
             "note": "首启自标定属 S2（T-805），当前使用保底档（§6.8）",
         },
+        # ↓ 阶段 D/E（T-804）：决策产物 + 水位反馈
+        "decision": decision,
+        "watermark": watermark_info,
         "summary": {
             "model_count": model_count,
             "task_count_by_status": task_counts,

@@ -25,20 +25,23 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
+from typing import Callable
 
 from . import backend_cache
 from .device_probe import DeviceFacts, probe_device_facts
+from .ep_verify import (
+    GPU_PROVIDERS as _GPU_PROVIDERS,
+)
 from .ep_verify import (
     VerificationResult,
     deliberately_excluded,
     hardware_fingerprint,
     verify_candidates,
 )
+from .fallback import DEFAULT_ALIGN
+from .runtime_profile import CalibrationView, RuntimeRequest, decide_profile
 
 logger = logging.getLogger("websr.engine.capabilities")
-
-#: 视为"GPU 后端"的 ORT provider（用于档位第 3 条判定）
-_GPU_PROVIDERS = {"CUDAExecutionProvider", "TensorrtExecutionProvider"}
 
 #: 档位边界（§6.2 判定规则，**机制常量**，与"数值运行时求"不冲突）
 _T3_MIN_VRAM_MB = 48 * 1024
@@ -164,12 +167,19 @@ def build_snapshot(
     ort_module=None,
     probe_size: int = 256,
     measure_latency: bool = True,
+    calibration_provider: Callable[[str | None], CalibrationView | None] | None = None,
 ) -> tuple[dict, dict]:
     """执行完整编排，返回 `(capabilities, details)`。
 
     `probe_model` 优先；未给则从 `models_dir` 里按 `pick_probe_model` 规则选。
     `details` 供诊断导出使用（完整 DeviceFacts / 失败项 / 被剔除后端 / 缓存路径）。
     **永不抛异常**——任何环节失败都降级为 T0 + 保底档并如实记录。
+
+    `calibration_provider` 是阶段 C 标定结论的**取数回调**（可选，应用层注入）：
+    因为标定记录的匹配需要**硬件指纹**，而指纹要等阶段 A 探测完才知道，
+    所以这里传回调而不是值——引擎层保持不读库（纯度），应用层提供 `指纹 → 标定记录` 的映射。
+    无有效标定时 `using_fallback` 为 true（§6.8）。⚠️ 快照按数据根缓存，
+    标定落定后需以 `refresh=True` 重建（T-805 接线时在标定完成回调中触发）。
     """
     facts = probe_device_facts()
 
@@ -213,20 +223,38 @@ def build_snapshot(
     evidence = [v.to_evidence() for v in result.verdicts]
     evidence += [v.to_evidence() for v in excluded]
 
-    # 精度：阶段 C 未落地 → 保底档（§6.8），不论 GPU/CPU 一律 fp32
-    active_backend = result.adopted[0] if result.adopted else "unverified"
+    # 标定结论（阶段 C）：交给应用层按硬件指纹去取；取不到或抛异常一律按未标定处理
+    cal_view: CalibrationView | None = None
+    if calibration_provider is not None:
+        try:
+            cal_view = calibration_provider(result.hardware_fingerprint)
+        except Exception as exc:  # 标定取数失败不得影响能力面板
+            logger.debug("标定结论取数失败（按未标定处理）: %s", exc)
+
+    # 保底语义**不再硬编码**：直接问阶段 D 要一次"自动档决策"的结果（T-804）。
+    # 这样能力面板显示的"当前后端 / 精度 / 是否保底"与任务真正拿到的决策同源——
+    # 标定（阶段 C）落地后此处的 `using_fallback` 会自动变为 false，无需改本文件。
+    baseline = decide_profile(
+        facts=facts,
+        adopted=result.adopted,
+        fingerprint=result.hardware_fingerprint,
+        calibration=cal_view,
+        request=RuntimeRequest(auto=True),
+        align=DEFAULT_ALIGN,
+    )
+    active_backend = baseline.backend or (result.adopted[0] if result.adopted else "unverified")
     capabilities = {
         "tier": tier,
         "tier_label": tier_label,
         "tier_reason": tier_reason,
         "device_facts": summarize_device_facts(facts),
         "verified_backends": [
-            v.to_verified_backend(precision="fp32") for v in result.verdicts if v.usable
+            v.to_verified_backend(precision=baseline.precision) for v in result.verdicts if v.usable
         ],
         "ep_evidence": evidence,
-        "using_fallback": True,  # 阶段 C/D（T-804/T-805）落地前恒为保底档
+        "using_fallback": baseline.using_fallback,
         "active_backend": active_backend,
-        "active_precision": "fp32",
+        "active_precision": baseline.precision,
         # 档位模拟属 T-901（P3）；此处只提供契约要求的占位语义
         "simulation": {"enabled": False, "force_tier": None},
     }
@@ -259,6 +287,7 @@ def get_snapshot(
     ort_module=None,
     probe_size: int = 256,
     measure_latency: bool = True,
+    calibration_provider: Callable[[str | None], CalibrationView | None] | None = None,
 ) -> tuple[dict, dict]:
     """进程内缓存的快照（避免每次 `/api/system/capabilities` 都重跑探测与 profile）。"""
     key = _root_key(data_root)
@@ -274,6 +303,7 @@ def get_snapshot(
         ort_module=ort_module,
         probe_size=probe_size,
         measure_latency=measure_latency,
+        calibration_provider=calibration_provider,
     )
     facts = built_details.pop("_facts", None)  # 内部复用项，不下发给调用方
     global _last_key

@@ -24,10 +24,13 @@ from sqlalchemy.orm import Session
 
 from ..core.errors import AppError
 from ..db import get_session
+from ..engine import watermark
 from ..engine.availability import gate_availability, probe_hardware_snapshot
+from ..engine.ep_verify import GPU_PROVIDERS
+from ..engine.runtime_profile import RuntimeProfile, reprofile
 from ..models.entities import Artifact, Model, Task
 from ..schemas.task import ArtifactOut, ProgressOut, TaskOut
-from ..services import media_store
+from ..services import engine_decision, media_store
 from ..services.model_registry import get_model_or_404
 from .broadcaster import broadcaster
 from .executor import TaskContext, TaskCancelled, get_executor
@@ -43,6 +46,14 @@ THROTTLE_SECONDS = 1.0
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _safe_water_level() -> dict | None:
+    """失败现场的水位快照（**永不抛异常**——它只是给错误详情附一份现场）。"""
+    try:
+        return watermark.sample_water_level().to_dict()
+    except Exception:
+        return None
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -287,44 +298,148 @@ class TaskManager:
                     self._publish_task(task_id, "progress", stage=stage, message=message)
                     # chunk 级只走广播不落库（tech-arch §4.1）；item 级在状态翻转时落库
 
-            ctx = TaskContext(
-                task_id=task_id,
-                params=dict(t.params or {}),
-                model=model,
-                source_path=source,
-                should_cancel=flag.is_set,
-                report_progress=report,
-            )
-            try:
-                resolved = get_executor().run(ctx)
-            except TaskCancelled:
-                t = s.get(Task, task_id)
-                t.status = "canceled"
-                t.finished_at = _utcnow()
-                s.commit()
-            except Exception as exc:
-                logger.exception("任务失败: task_id=%s", task_id)
-                t = s.get(Task, task_id)
-                t.status = "failed"
-                t.error = {
-                    "code": "INTERNAL_ERROR",
-                    "message": "推理执行失败",
-                    "suggestion": "请导出诊断 JSON 并查看日志定位原因",
-                    "detail": {"exception": f"{type(exc).__name__}: {exc}"},
-                }
-                t.finished_at = _utcnow()
-                s.commit()
-            else:
+            # ---- 阶段 D：本次任务的运行时决策（在控制面完成，执行器只负责执行）----
+            profile = engine_decision.decide_for_task(dict(t.params or {}), model)
+            executor = get_executor()
+
+            oom_retry_used = False   # OOM 降档**只重试一次**（§6.1 阶段 E）
+            outcome = "failed"
+            failure: BaseException | None = None
+            resolved: dict | None = None
+
+            while True:
+                ctx = TaskContext(
+                    task_id=task_id,
+                    params=dict(t.params or {}),
+                    model=model,
+                    source_path=source,
+                    should_cancel=flag.is_set,
+                    report_progress=report,
+                    profile=profile,
+                )
+                try:
+                    resolved = executor.run(ctx)
+                except TaskCancelled:
+                    outcome = "canceled"
+                except Exception as exc:
+                    # ---- 阶段 E：OOM → 降一档 → 重试一次；再失败即降档链耗尽 ----
+                    if watermark.is_oom_error(exc) and not oom_retry_used:
+                        changes, record = watermark.next_downgrade(
+                            profile.params(),
+                            adopted=self._adopted_backends(),
+                            cause="推理时资源耗尽（OOM）",
+                        )
+                        if changes:
+                            oom_retry_used = True
+                            profile = reprofile(profile, changes=changes, record=record)
+                            watermark.get_tracker().note_downgrade()
+                            logger.warning(
+                                "OOM 触发降档重试：%s → %s（task_id=%s）",
+                                record["from"], record["to"], task_id,
+                            )
+                            self._publish_task(
+                                task_id, "progress", stage=None,
+                                message=f"资源不足，已降档（{record['field']} → {record['to']}）后重试",
+                            )
+                            continue
+                    outcome, failure = "failed", exc
+                else:
+                    outcome = "completed"
+                break
+
+            if outcome == "completed":
                 t = s.get(Task, task_id)
                 t.status = "completed"
                 t.resolved = resolved
                 t.progress_done = t.progress_total
                 t.finished_at = _utcnow()
                 s.commit()
+            elif outcome == "canceled":
+                t = s.get(Task, task_id)
+                t.status = "canceled"
+                t.finished_at = _utcnow()
+                s.commit()
+            else:
+                self._fail_task(s, task_id, failure, profile)
+
+            # 终态已落库 → **立即释放并发槽**（ADR-005 约束 1：状态翻转即短事务的收尾）。
+            # 观测与广播不得占用调度位：水位采样要起一次 nvidia-smi 子进程（百毫秒级），
+            # 若拖到持槽位置执行，下一个任务会在"任务已完成"之后仍收到 409
+            # TASK_ALREADY_RUNNING——这是 T-804 首次实现时真实踩到的竞态。
+            self._release_active(task_id)
             self._publish_done(task_id)
+            self._record_water_level(task_id, stage=outcome)
         finally:
             s.close()
             self._runtime.pop(task_id, None)
+
+    # ---- 阶段 D/E 辅助 ----
+
+    def _adopted_backends(self) -> list[str]:
+        """当前已验证后端列表（降档链判断"能否切到 CPU"需要）。取不到就当空列表。"""
+        try:
+            from ..services import system_info
+
+            _, details = system_info.get_capability_snapshot()
+            return list(details.get("adopted_backends") or [])
+        except Exception as exc:
+            logger.debug("读取已验证后端列表失败（降档链按空列表处理）: %s", exc)
+            return []
+
+    def _record_water_level(self, task_id: int, *, stage: str) -> None:
+        """阶段 E：任务边界采样一次水位并记入历史（采样本身永不抛异常）。
+
+        **边界限制（如实登记）**：任务内的高频采样需要真实推理循环，随 T-806 接入后
+        才能"边跑边采"；当前只能采到任务边界，故水位对模拟执行器只证明**机制**成立。
+        """
+        try:
+            level = watermark.sample_water_level()
+            entry = watermark.get_tracker().record(level, stage=stage)
+            self._runtime.setdefault(task_id, {})["watermark"] = entry
+            if entry.get("suggest_downgrade"):
+                logger.warning(
+                    "任务水位连续 %s 次超阈值（最近 ratio=%s），下一任务将降档",
+                    entry.get("consecutive_high"), entry.get("ratio"),
+                )
+        except Exception as exc:  # 观测失败不得影响任务结果
+            logger.debug("水位采样失败（忽略）: %s", exc)
+
+    def _fail_task(
+        self, s: Session, task_id: int, exc: BaseException | None, profile: RuntimeProfile
+    ) -> None:
+        """失败定案。OOM 类失败报显存/内存不足（**降档链耗尽后的终态**），其余报内部错误。"""
+        logger.warning("任务失败: task_id=%s exception=%s", task_id, exc)
+        t = s.get(Task, task_id)
+        if t is None:
+            return
+        oom = exc is not None and watermark.is_oom_error(exc)
+        if oom:
+            level = _safe_water_level()
+            gpu = profile.backend in GPU_PROVIDERS
+            t.error = {
+                "code": watermark.insufficient_error_code(profile.backend),
+                "message": ("显存不足：已自动降档仍无法完成" if gpu
+                            else "物理内存不足：已自动降档仍无法完成"),
+                "suggestion": "降低放大倍数、改用更小的模型，或关闭其它占用资源的程序后重试",
+                "detail": {
+                    "backend": profile.backend,
+                    "tile": profile.tile,
+                    "precision": profile.precision,
+                    "downgrade_attempts": len(profile.downgrades),
+                    "water_level": level,
+                    "exception": f"{type(exc).__name__}: {exc}",
+                },
+            }
+        else:
+            t.error = {
+                "code": "INTERNAL_ERROR",
+                "message": "推理执行失败",
+                "suggestion": "请导出诊断 JSON 并查看日志定位原因",
+                "detail": {"exception": str(exc) if exc is not None else "未知异常"},
+            }
+        t.status = "failed"
+        t.finished_at = _utcnow()
+        s.commit()
 
     # ---- 广播 ----
 

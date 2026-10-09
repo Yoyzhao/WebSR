@@ -188,6 +188,18 @@ def _system_memory_mb() -> tuple[int | None, int | None]:
         return None, None
 
 
+def read_system_memory_mb() -> tuple[int | None, int | None]:
+    """(`total_mb`, `available_mb`) 的公开读取入口（阶段 E 水位采样复用，**永不抛异常**）。
+
+    与阶段 A 共用同一实现，避免"启动时读到的内存"与"任务期读到的内存"来自两套口径。
+    """
+    try:
+        return _system_memory_mb()
+    except Exception as exc:
+        logger.debug("物理内存读取失败（记 None）：%s", exc)
+        return None, None
+
+
 def _probe_nvidia() -> list[NvidiaGpuFacts]:
     """`nvidia-smi` 单次查询全部字段（多次调用会显著拉长探测时间）。
 

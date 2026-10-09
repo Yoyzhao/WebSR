@@ -58,6 +58,12 @@ _PROVIDER_LABELS = {
     "CPUExecutionProvider": "CPU",
 }
 
+#: 视为"GPU 后端"的 provider 集合——**后端域的事实**，故定义在此处，
+#: 由档位判定（`capabilities.derive_tier`）与阶段 D 决策（`runtime_profile`）共同引用，
+#: 避免两处各写一份而漂移。TensorRT 属 G-04（需 T-902 能力声明才入候选链），
+#: 但一旦出现在 adopted 列表里，它就是 GPU 后端。
+GPU_PROVIDERS = frozenset({"CUDAExecutionProvider", "TensorrtExecutionProvider"})
+
 
 def backend_id(provider: str) -> str:
     return _PROVIDER_TO_BACKEND_ID.get(provider, provider)
