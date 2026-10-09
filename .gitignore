@@ -82,3 +82,10 @@ web/*.yaml
 web/node_modules/.vite/
 web/tsconfig.tsbuildinfo
 web/*.tsbuildinfo
+
+# ---- T-210 ncnn 可用性验证产物 ----
+# 模型包 45 MB（zip）/ 55 MB（解压）体积过大且可完整重建：
+# 重建步骤见 docs/tech/research/图像超分修复-T210-ncnn可用性验证结论.md §6。
+# 验证报告 JSON 与降级路径输出图（< 1 MB）仍入库，作为结论证据。
+.workbuddy/verify/t210/*.zip
+.workbuddy/verify/t210/ncnn_pkg/
