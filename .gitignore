@@ -117,3 +117,13 @@ web/*.tsbuildinfo
 .workbuddy/verify/t801/*.onnx
 .workbuddy/verify/t801/ir/
 .workbuddy/verify/t801/_*.log
+
+# ---- 内置风格模型增补（2026-10-09：动漫 + 轻量通用）----
+# 交付物本身在 `data/models/`（**入库**），此处只放构建证据。
+# 动漫权重 17.9 MB 不入库：官方 release `xinntao/Real-ESRGAN@v0.2.2.4`
+# `RealESRGAN_x4plus_anime_6B.pth`，sha256 f872d837…e99da，可用一条命令重建；
+# 转换产物 `.onnx` 与临时日志同理不入库。保留 `check_builtin_models.py`（真机复核脚本）
+# 与 `*.onnx.meta.json`（工具自检的量化数值证据，< 2 KB）。
+.workbuddy/verify/builtin_models/*.pth
+.workbuddy/verify/builtin_models/*.onnx
+.workbuddy/verify/builtin_models/_*.log

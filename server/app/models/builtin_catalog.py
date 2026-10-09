@@ -9,6 +9,11 @@
 - `capabilities.supports_tile0` 依据 `data/models/inspect.json` 的
   `has_dynamic_hw: true`（RealESRGAN_x4 动态 H/W 已验证）；
 - 文件缺失时跳过并告警（允许裁剪分发），不阻断启动。
+- **风格由「模型」区分，不由参数区分**（PRD §7.3：模型不做自动推荐，选择权在用户）：
+  通用 / 写实 = `RealESRGAN_x4plus`，动漫 = `RealESRGAN_x4plus_anime_6B`，
+  轻量通用 = `realesr-general-x4v3`。后两者由 `tools/convert_to_onnx.py` 离线转换得到，
+  动态 H/W 与正确性由转换产物的 `dynamic: true` 与**同源自检**保证
+  （anime_6B 3.22e-06 / general-x4v3 4.08e-06，阈值 1e-3）。
 """
 from dataclasses import dataclass, field
 
@@ -78,6 +83,38 @@ BUILTIN_MODELS: tuple[BuiltinModelSpec, ...] = (
         supported_backends=["openvino", "cpu"],
         params_count=16_697_987,
         companion_name="RealESRGAN_x4_fp16.bin",
+        capabilities=dict(_DEFAULT_CAPS),
+    ),
+    # ---- 风格模型（2026-10-09 增补，用户确认「补动漫 + 轻量通用」）----
+    # 二者与原主模型同为 Real-ESRGAN 家族，但**是不同的权重**（不是同一模型的技术变体）：
+    # 动漫 6 块 RRDB（4.47M 参数）面向线条与平涂色块；general-x4v3（1.21M 参数）
+    # 是 SRVGGNetCompact 轻量网络。均由官方权重经离线转换得到（BSD-3-Clause）。
+    BuiltinModelSpec(
+        path="RealESRGAN_x4plus_anime_6B.onnx",
+        name="RealESRGAN_x4plus_anime_6B",
+        architecture="RRDBNet",
+        description="动漫特化 4 倍超分（RRDBNet 6 块，4.47M 参数）。针对线条与平涂色块优化，"
+                    "适用于动画截图与插画；处理写实照片请选通用模型。",
+        format="onnx",
+        scale=4,
+        license="BSD-3-Clause",
+        min_vram_mb=2048,
+        supported_backends=["cuda", "cpu", "openvino"],
+        params_count=4_467_779,
+        capabilities=dict(_DEFAULT_CAPS),
+    ),
+    BuiltinModelSpec(
+        path="realesr-general-x4v3.onnx",
+        name="realesr-general-x4v3",
+        architecture="SRVGGNetCompact",
+        description="轻量通用 4 倍超分（SRVGGNetCompact，1.21M 参数、4.6 MB）。体积与算力需求"
+                    "远低于 x4plus，面向低配或纯 CPU 场景；细节还原能力弱于 x4plus。",
+        format="onnx",
+        scale=4,
+        license="BSD-3-Clause",
+        min_vram_mb=1024,
+        supported_backends=["cuda", "cpu", "openvino"],
+        params_count=1_213_296,
         capabilities=dict(_DEFAULT_CAPS),
     ),
 )

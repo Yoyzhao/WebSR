@@ -48,6 +48,9 @@ SHA_X4 = fake(MODELS / "RealESRGAN_x4.onnx", b"fake-x4-onnx" * 100)
 fake(MODELS / "RealESRGAN_x4_fp16.onnx", b"fake-x4-fp16" * 100)
 fake(MODELS / "ir" / "RealESRGAN_x4_fp16.xml", b"<xml/>" * 50)
 fake(MODELS / "ir" / "RealESRGAN_x4_fp16.bin", b"ir-weights" * 100)
+# 风格模型（2026-10-09 增补）：内容同样是假的——登记只算哈希，不解析网络结构
+fake(MODELS / "RealESRGAN_x4plus_anime_6B.onnx", b"fake-anime-6b" * 100)
+fake(MODELS / "realesr-general-x4v3.onnx", b"fake-general-x4v3" * 100)
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -59,7 +62,7 @@ with TestClient(app) as client:
     check("GET /api/models → 200", r.status_code == 200)
     models = r.json()
     check("返回数组（非分页包装）", isinstance(models, list))
-    check("内置 3 项已登记", len(models) == 3, f"actual={len(models)}")
+    check("内置 5 项已登记", len(models) == 5, f"actual={len(models)}")
     by_name = {m["name"]: m for m in models}
     x4 = by_name.get("RealESRGAN_x4plus", {})
     check("id 带 mdl_ 前缀", x4.get("id", "").startswith("mdl_"))
@@ -68,6 +71,22 @@ with TestClient(app) as client:
     check("capabilities 完整", set(x4.get("capabilities", {})) == {
         "supports_fp16", "supports_batch", "supports_tile0", "has_tensorrt",
         "is_generative", "num_inference_steps", "requires_prompt"})
+
+    # 风格模型（2026-10-09 增补）：风格由「模型」区分，故元信息必须如实可辨
+    anime = by_name.get("RealESRGAN_x4plus_anime_6B", {})
+    check("动漫模型已登记（RRDBNet 6 块 / 4,467,779 参数）",
+          anime.get("architecture") == "RRDBNet" and anime.get("params_count") == 4_467_779,
+          f"actual={anime.get('architecture')}/{anime.get('params_count')}")
+    check("动漫模型 scale=4 且为内置",
+          anime.get("scale") == 4 and anime.get("source") == "builtin")
+    general = by_name.get("realesr-general-x4v3", {})
+    check("轻量通用模型已登记（SRVGGNetCompact / 1,213,296 参数）",
+          general.get("architecture") == "SRVGGNetCompact"
+          and general.get("params_count") == 1_213_296,
+          f"actual={general.get('architecture')}/{general.get('params_count')}")
+    check("轻量模型显存门槛低于主模型",
+          (general.get("min_vram_mb") or 0) < (x4.get("min_vram_mb") or 0),
+          f"general={general.get('min_vram_mb')} x4={x4.get('min_vram_mb')}")
     check("architecture 来自 catalog", x4.get("architecture") == "RRDBNet")
     ir = by_name.get("RealESRGAN_x4 (OpenVINO IR)", {})
     check("IR companion 为 ['.xml', '.bin']", ir.get("companion") == [".xml", ".bin"])
@@ -166,7 +185,7 @@ with TestClient(app) as client:
 print("== 8. 重启幂等（再进一次 lifespan）==")
 with TestClient(app) as client2:
     models2 = client2.get("/api/models").json()
-    check("重启后内置不重复登记", len([m for m in models2 if m["source"] == "builtin"]) == 3)
+    check("重启后内置不重复登记", len([m for m in models2 if m["source"] == "builtin"]) == 5)
 
 print("== 9. 可用性门控单元断言 ==")
 from app.engine.availability import HardwareSnapshot, gate_availability  # noqa: E402

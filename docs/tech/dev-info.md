@@ -174,18 +174,26 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 > `server/` 源码**不出现** `torch` / `spandrel` / `tools` 的 import（有回归断言钉住）。
 > 转换通过**子进程**调用工具完成，产物交回 F-05 导入链登记为新的 `.onnx` 模型。
 
-### 5.2 模型资产（`data/models/`，共 294 MB）
+### 5.2 模型资产（`data/models/`，共 316 MB）
 
 > 📌 **模型统一存放于 `data/models/`**（用户指定的应用数据目录，2026-09-30 从 `.workbuddy/models/` 迁入）。
 > 迁移后已用 `tools/p0_1_cuda_smoke.py` 做端到端验证：**1024 节点全在 CUDA，输出 mean 0.534278 与迁移前一致**。
+>
+> **产品内置登记 5 项**（`server/app/models/builtin_catalog.py` 声明，启动时按 path upsert）：
+> **通用/写实、动漫、轻量通用三个风格各占一项**——风格由「模型」区分，**不由参数区分**
+> （PRD §7.3：模型不做自动推荐，选择权在用户）；另两项是主模型的 fp16 与 OpenVINO IR 技术变体。
+> 标「基准」的**不登记**（开发期产物）。后两项风格模型由 `tools/convert_to_onnx.py` 离线转换得到。
 
 | 文件 | 大小 | 说明 |
 |---|---|---|
-| `RealESRGAN_x4.onnx` | 67,051,616 B | 主模型（RRDBNet，16,697,987 参数，opset 17，动态 H/W）。sha256 `5c586662…b89c033` |
-| `RealESRGAN_x4_fp16.onnx` | 33,748,503 B | fp16（Resize 保持 fp32） |
-| `RealESRGAN_x4_fp16all.onnx` | 33,748,503 B | 全量 fp16 |
-| `RealESRGAN_x4_s512.onnx` | 67,129,351 B | H/W 冻结为 512 的静态 shape 版 |
-| `ir/` | — | OpenVINO IR（fp32 63.7 MB / fp16 31.85 MB） |
+| `RealESRGAN_x4.onnx` | 67,051,616 B | **内置①** 通用/写实（RRDBNet，16,697,987 参数，opset 17，动态 H/W）。sha256 `5c586662…b89c033` |
+| `RealESRGAN_x4plus_anime_6B.onnx` | 17,961,298 B | **内置②** 动漫（RRDBNet 6 块，4,467,779 参数；转自官方 `.pth`，同源自检 3.22e-06）。sha256 `27c1f885…9b3527f` |
+| `realesr-general-x4v3.onnx` | 4,866,394 B | **内置③** 轻量通用（SRVGGNetCompact，1,213,296 参数；自检 4.08e-06）。sha256 `ba3e0db2…f8f6169` |
+| `RealESRGAN_x4_fp16.onnx` | 33,748,503 B | **内置④** 主模型 fp16（Resize 保持 fp32） |
+| `ir/RealESRGAN_x4_fp16.xml` + `.bin` | 31.85 MB | **内置⑤** OpenVINO IR（Intel 核显 / 集显路径，走原生 API） |
+| `RealESRGAN_x4_fp16all.onnx` | 33,748,503 B | 基准 · 全量 fp16 |
+| `RealESRGAN_x4_s512.onnx` | 67,129,351 B | 基准 · H/W 冻结为 512 的静态 shape 版 |
+| `ir/RealESRGAN_x4_fp32.xml` + `.bin` | 63.7 MB | 基准 · fp32 IR 对 |
 | `inspect.json` | 1,070 B | 模型结构检查结果 |
 
 ### 5.3 基准结果与脚本

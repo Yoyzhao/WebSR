@@ -304,7 +304,7 @@ tech-arch §6.6 启动序列落地：第 1 步阻塞（迁移 → DLL 注册 →
 
 #### 技术方案
 
-- **内置登记**：catalog 声明式描述 3 个产品内置模型（`RealESRGAN_x4.onnx` / `_fp16.onnx` / IR fp16 对）；启动时按 path upsert，文件缺失只告警。基准变体（`_fp16all.onnx` / `_s512.onnx` / IR fp32 对）**不登记**——它们是开发期基准产物
+- **内置登记**：catalog 声明式描述 **5 个**产品内置模型（`RealESRGAN_x4.onnx` / `_fp16.onnx` / IR fp16 对，外加 2026-10-09 增补的两个**风格模型**：`RealESRGAN_x4plus_anime_6B.onnx`（动漫）与 `realesr-general-x4v3.onnx`（轻量通用））；启动时按 path upsert，文件缺失只告警。基准变体（`_fp16all.onnx` / `_s512.onnx` / IR fp32 对）**不登记**——它们是开发期基准产物。**风格由「模型」区分、不由参数区分**（PRD §7.3：模型不做自动推荐，选择权在用户）
 - **sha256**：IR/ncnn 取「主文件 + 配套 .bin」**组合哈希**（权重体变化也要能触发去重）；`MODEL.sha256` 唯一约束做导入去重
 - **导入**：multipart 流式落盘（不读内存）→ 格式路由校验（ADR-003：主文件为 `.bin` 或 IR/ncnn 缺配套 → `MODEL_MISSING_COMPANION`）→ 组合哈希去重 → 落 `data/models/imported/` → `.pth`/`.safetensors` 登记为 `needs_convert`
 - **删除**：内置模型拒绝删除（409）；导入模型只删登记记录、不删磁盘文件（与前端确认弹窗文案一致）
@@ -1453,3 +1453,42 @@ Constant 94 / Add 93 / Mul 92 / Resize 2`）、opset 17、输入输出名 `input
   故接口做成**异步作业**；同一时刻只跑一个，重复触发返回现状或复用产物；
 - **不做"自动挑架构/自动改倍数"**：模型声明的 `scale` 不在 2/3/4 之内时直接报错，
   **不替用户改成 4**——那是替用户做决定。
+
+---
+
+### 增补：内置风格模型（2026-10-09，非任务项）
+
+> **触发**：用户指出「Real-ESRGAN 分写实 / 动漫 / 通用几个档位，现在没看到模型或者参数设置」。
+> 核查确认：那几套是**独立权重文件，不是参数档位**；本项目把"换风格"设计成「**换模型**」（F-05），
+> 而内置清单原先只有 `RealESRGAN_x4plus` **一个风格**的三个技术变体（fp32 / fp16 / IR），
+> 因此"看不出风格可选"。经用户确认补入两个风格模型。
+
+#### 交付
+
+| 项 | 内容 |
+|---|---|
+| `data/models/RealESRGAN_x4plus_anime_6B.onnx` | **动漫**：RRDBNet 6 块 / 4,467,779 参数 / 17,961,298 B。sha256 `27c1f885…9b3527f` |
+| `data/models/realesr-general-x4v3.onnx` | **轻量通用**：SRVGGNetCompact / 1,213,296 参数 / 4,866,394 B。sha256 `ba3e0db2…f8f6169` |
+| `server/app/models/builtin_catalog.py` | 增补 2 条 `BuiltinModelSpec`（显存门槛 2048 / 1024 MB），内置项 3 → **5** |
+| `web/src/api/mock/data.ts` | 同步 `MOCK_MODELS`——前端当前 `USE_MOCK = true`，不同步则界面上看不到 |
+
+#### 关键点
+
+- **权重来源可复现**：动漫取**官方 release**（`xinntao/Real-ESRGAN@v0.2.2.4`，
+  sha256 `f872d837…e99da`）；轻量复用 T-807 已入库的夹具 `realesr-general-x4v3.pth`（v0.2.5.0）。
+- **正确性沿用 T-807 的判据**（同源自检，不是"看起来对"）：anime_6B `max|torch−onnx| = 3.22e-06`、
+  general-x4v3 `4.08e-06`，阈值 1e-3 → 通过才落盘。
+- **"登记了"不等于"能用"**：另以**产品加载器本尊**真机复核
+  （`.workbuddy/verify/builtin_models/check_builtin_models.py`）逐个加载并推理，**12/12 通过**。
+  同口径（CPU EP，64×64 → 256×256）：`RealESRGAN_x4` 432 ms ｜ `anime_6B` 147 ms ｜
+  `general-x4v3` **32 ms**。⚠️ 这三个数是**本机实测参照**，**不得**进产品参数表。
+- **不扩大 PRD 承诺**：内置 5 个仍**全是 `scale=4`**——×2 / ×3 倍数无对应权重；
+  人脸修复（F-14）仍属 S3。本次只补"风格模型"这一项缺口。
+- **风格属于"模型固有属性"**：架构 / 许可证 / 最低显存 / 能力声明可声明（来源：前置调研与
+  P0 实测），与"单机实测数值"（tile / 吞吐）不同——后者一律运行时求。
+
+#### 验证
+
+`verify_t604_models.py` **41/41**（新增 4 条断言：动漫架构与参数量、`source=builtin`、
+轻量架构与参数量、显存门槛序）；`check_builtin_models.py` **12/12**；
+前端 `npm run build`（含 `vue-tsc` 类型检查）通过。
