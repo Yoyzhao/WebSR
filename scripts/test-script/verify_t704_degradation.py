@@ -252,6 +252,7 @@ def main() -> int:
 
     # ---- 3. 降档链耗尽 → VRAM_INSUFFICIENT --------------------------------------
     section("3. 降档链耗尽 → VRAM_INSUFFICIENT（OOM 只重试一次）")
+    oom_wl = None  # OOM 现场的水位快照（段 4 的确定性判据用）
     if exhausted_tile is None:
         exhausted_tile = (success_tile * 4) if success_tile else 4096
         t_ex = run_task(file_id, model_id, tile=exhausted_tile, auto=False)
@@ -278,17 +279,31 @@ def main() -> int:
         wl = detail.get("water_level") or {}
         check("失败现场附带真实水位快照（vram/ram 比值）",
               wl.get("ratio") is not None, json.dumps(wl, ensure_ascii=False)[:160])
+        oom_wl = wl
 
-    # ---- 4. 水位采样在真实 OOM 现场确实采到高水位 --------------------------------
-    section("4. 水位（阶段 E 反馈）：真实 OOM 现场的水位采样")
+    # ---- 4. 水位采样：OOM 现场的确定性证据 + 边界历史的如实登记 ------------------
+    section("4. 水位（阶段 E 反馈）：OOM 现场采样与任务边界采样")
     _, diag = http("GET", "/system/diagnostics")
     wm = (diag or {}).get("watermark") or {}
     hist = wm.get("history") or []
     high_entries = [h for h in hist if h.get("high")]
     check("诊断导出可见水位阈值与连续计数口径",
           wm.get("high_ratio") == 0.85 and wm.get("consecutive_threshold") == 2, str(wm)[:160])
-    check("历史里存在真实的高水位条目（ratio > 85%）", bool(high_entries),
-          f"共 {len(high_entries)} 条；最近 {high_entries[-1].get('ratio') if high_entries else None}")
+    # 🔴 确定性判据（T-707 收口批次把旧判据的时机依赖钉死）：
+    #    旧判据"历史里存在高水位条目"依赖**任务边界采样**恰好落在 WDDM 延迟释放完成之前
+    #    —— 而边界采样**设计上就在资源释放之后**（`_record_water_level` 排在
+    #    `_release_active` 后面），采到高水位纯属性能/驱动时机运气：同一天内先 31/0/1
+    #    后连续失败。真正确定性的 OOM 现场证据是 `_fail_task` 在**受阻瞬间**采的
+    #    `detail.water_level.ratio`（此前实测 0.9495）。
+    ratio = (oom_wl or {}).get("ratio")
+    check("OOM 受阻瞬间的现场采样水位显著抬升（ratio > 0.5）",
+          ratio is not None and ratio > 0.5,
+          f"现场 ratio={ratio}（推导：降档耗尽 = 最后一次尝试的分配请求 > 剩余可用，"
+          f"设备级占用必然已显著抬升；0.5 为保守下界）"
+          if ratio is not None else "无 OOM 现场快照（段 3 未触发耗尽）")
+    # 边界历史：如实登记，不作判定（见上）——高水位条目出现与否属时机运气
+    print(f"  · 观察：任务边界历史 {len(hist)} 条（高水位 {len(high_entries)} 条）——"
+          f"边界采样设计上在资源释放之后，高水位条目出现与否属 WDDM 延迟释放时机，不作判定")
     check("WDDM 口径限制被原样保留（设备级用量 ≠ 按进程用量）",
           "设备级" in (wm.get("sampling_note") or ""), str(wm.get("sampling_note"))[:80])
     # ⚠️ 如实登记：连续 2 次高水位 → 降档，在真实路径上**难以按需复现**：

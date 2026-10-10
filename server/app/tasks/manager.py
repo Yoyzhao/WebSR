@@ -265,7 +265,14 @@ class TaskManager:
 
     # ---- 取消 ----
 
-    def cancel(self, raw_id: str) -> None:
+    def cancel(self, raw_id: str) -> str:
+        """取消任务。返回**受理时刻**置下的状态（"canceled" / "canceling"）。
+
+        返回值的用途（契约 §3.3）：取消端点的响应体承诺 `status: "canceling"` ——
+        但工作线程可能在「本方法提交受理态」与「路由层重读 DB」之间就把任务翻到
+        终态（协作式取消的固有竞态，T-707 收口批次实测复现）。路由层用本返回值
+        保证响应与冻结契约一致；客户端随后 GET 仍会看到真实终态。
+        """
         task_id = parse_task_id(raw_id)
         s = get_session()
         try:
@@ -281,14 +288,15 @@ class TaskManager:
                 s.commit()
                 self._release_active(task_id)
                 self._publish_done(task_id)
-            elif t.status == "running":
-                # 协作式取消：置中间态 + 标志，执行器块间自检后由工作线程终态化
-                t.status = "canceling"
-                s.commit()
-                flag = self._cancel_flags.get(task_id)
-                if flag:
-                    flag.set()
-                self._publish_task(task_id, "progress", stage=None, message="正在取消")
+                return "canceled"
+            # running：协作式取消——置中间态 + 标志，执行器块间自检后由工作线程终态化
+            t.status = "canceling"
+            s.commit()
+            flag = self._cancel_flags.get(task_id)
+            if flag:
+                flag.set()
+            self._publish_task(task_id, "progress", stage=None, message="正在取消")
+            return "canceling"
         finally:
             s.close()
 

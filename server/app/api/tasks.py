@@ -67,11 +67,18 @@ def get_task(task_id: str) -> TaskOut:
 
 @router.post("/{task_id}/cancel")
 def cancel_task(task_id: str) -> TaskOut:
-    manager.cancel(task_id)
+    # 契约 §3.3 冻结点：取消响应体是 `Task`（`status: "canceling"`）。
+    # `manager.cancel()` 返回**受理时刻**置下的状态；协作式取消的固有竞态是
+    # 工作线程可能在「受理提交」与「下方重读 DB」之间就翻转终态 —— 此时以
+    # 受理时刻为准返回 `canceling`（客户端随后 GET 会看到真实终态 `canceled`）。
+    status_at_cancel = manager.cancel(task_id)
     s = get_session()
     try:
         t = _get_task_or_404(s, task_id)
-        return serialize_task(t, s, manager.runtime_of(t.id))
+        out = serialize_task(t, s, manager.runtime_of(t.id))
+        if status_at_cancel == "canceling" and out.status != "canceling":
+            out.status = "canceling"
+        return out
     finally:
         s.close()
 
