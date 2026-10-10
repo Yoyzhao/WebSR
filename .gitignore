@@ -14,14 +14,19 @@
 # ===========================================================================
 
 # ---- 隔离的 Python 推理环境（严禁全局安装，严禁入库）----
+# sr-app   = 应用运行时依赖
+# sr-convert = 唯一含 PyTorch 的转换环境（应用本身禁止 import torch）
+# sr-gpu / sr-ov / sr-ovep = 基准验证环境，应用不得污染
 .venvs/
 
 # ---- 应用本地资产（data/ 整体不入库）----
-# 模型权重（内��� ONNX + OpenVINO IR，合计约 342 MB）与运行期数据都是**本地资产**：
+# 模型权重（内置 ONNX + OpenVINO IR，合计约 342 MB）与运行期数据都是**本地资产**：
 # 体积大、可由下载目录重建、且与使用者的硬件/偏好相关（有的用户只用轻量模型）。
 data/
 
 # ---- Python ----
+# 说明：`.venv/` 是 uv 的默认环境名；本项目实际用 `.venvs/sr-app`（见文件头）。
+# 两者都忽略，防止误建到默认位置后混进仓库。
 __pycache__/
 *.py[cod]
 *$py.class
@@ -29,6 +34,8 @@ __pycache__/
 .eggs/
 build/
 dist/
+.venv/
+.venvs/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -37,16 +44,16 @@ coverage.xml
 htmlcov/
 
 # ---- Node / 前端 ----
+# 说明：`node_modules/` 与 `dist/` 也由 web/.gitignore（Vite 脚手架生成）覆盖，
+# 此处保留是为了根目录将来引入 Node 工具时不必回头补。
 node_modules/
 .vite/
 *.tsbuildinfo
-npm-debug.log*
-yarn-error.log*
-pnpm-debug.log*
 
 # ---- 前端验证产物 ----
 # playwright-cli 每次运行都在工作目录生成大量页面快照（page-*.yml）与控制台日志，
 # 可随时重建。验证脚本的可复用副本归档在 scripts/test-script/。
+# 注意只覆盖 web/ 根一层（playwright-cli 的落点），子目录另有用途的 yaml 不受影响。
 web/.playwright-cli/
 web/playwright-cli.json
 web/*.yaml

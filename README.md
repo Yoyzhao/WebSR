@@ -6,22 +6,6 @@
 
 ---
 
-## 当前状态
-
-| 项 | 值 |
-|---|---|
-| **进度** | **M0–M5 全部完成**（M1/M2/M3 已验收；M4 前端原型已收口；M5 步骤 5C **已验收**、5D 已判定收口）｜**M6 已完成**（步骤 6/7 全部收口：`T-700`~`T-705` + `T-901`）｜**M7 进行中**：步骤 8 **已收口**（`T-706` S1 验收 ✅ + `T-707` 性能基线 ✅）；步骤 9（本地部署与交付）待做 |
-| 当前阶段 | **M7 步骤 8 已收口 → 步骤 9（本地部署）** —— 步骤 6 前后端整合（`T-700` 契约 v1.0 ✅ → `T-701` Mock 退场 ✅ → `T-702` 全链路 ✅）与步骤 7 系统联调（**`T-703` 画质与接缝验收 ✅ 38/38** → **`T-704` 异常与降级链联调 ✅ 31/0/1** → **`T-705` 取消与并发边界联调 ✅ 24/0/0**）均已完成；`T-901` 档位模拟开关 ✅ 74/74；**`T-706` S1 验收 ✅：45 条用例 + 46 条 UI 断言全绿（62/0/0），修掉 4 个缺陷（倍数校验缺失 / 跨卷落盘 100% 失败 / t604 同卷掩盖 / 面板陈旧快照显存漂移 9.6%）**；**`T-707` 性能基线 ✅ 14/0/0（P95 23.0 ms / SSE 1.01 帧/s / 峰值 < 可用量 80%）；顺带修掉缺陷 5「取消响应违反冻结契约 §3.3」（受理态竞态）** |
-| 下一步 | **步骤 9**（`T-708`/`T-709`：本地部署与交付文档，`STEP-9.md` 进入时建立）—— 这是宣布 v1 可交付前的最后一环 |
-| 门控 | ✅ **已通过（2026-10-10）**：5D 收口 → `T-700`（契约 v1.0 定稿）→ 真实接口联调（`T-701`/`T-702`）→ 系统联调与画质验收（`T-703`）→ 异常与边界联调（`T-704`/`T-705`）**均已完成** |
-| 代码目录 | `web/` ✅（15 业务组件 / 6 视图 / **真实 API + SSE 驱动，无 Mock**）｜ `server/` ✅（FastAPI，`T-601`~`T-609` + 引擎核心 `T-802`~`T-807` + `T-901`） |
-| 端到端验证 | `scripts/test-script/verify_t702_e2e.py` —— 覆盖**真实推理路径 + 真实 SSE + 真实产物**：直连 `:8000` **41/41**、经 Vite 代理 `:5173` **43/43**；`verify_t703_quality.py` —— **画质与接缝验收**（尺寸精确 ×4 / 色彩互换反证 / 多块接缝双跑 / **与官方 ncnn 实现交叉校验 PSNR 38.20 dB**）：**38/38**；`verify_t704_degradation.py` —— **异常与降级链**（**真实 OOM → 自动降档重试** / 耗尽报错 / 保底档可见）：**31/0/1**；`verify_t705_cancel_concurrency.py` —— **取消与并发边界**（≤2 s / 不留产物 / 409 / 并发槽释放）：**24/0/0**；`verify_t901_simulation.py` —— **档位模拟**：**74/74**；`verify_t706_acceptance.py` —— **S1 验收（逐条对照 PRD §2.5）**：**62/0/0** + 浏览器级 `run_t706_acceptance.cjs` **46/0/0**；`verify_t707_performance.py` —— **性能与资源基线（PRD §3.1）**：**14/0/0**；全量回归 **1066 项断言全绿**（离线 17 脚本 856 + 在线 210） |
-| 契约状态 | `docs/tech/api-contract.md` = **`v1.0.2 · 已冻结`**（8 个冻结点全 ✅、错误码 **20** 条、新增 `/api/tasks/{task_id}/logs`；**v1.0.1 / v1.0.2 均只澄清语义、不改变字段集** —— v1.0.1 澄清 `ModelOut.available`，v1.0.2 落地档位模拟口径）；一致性校验 `verify_t700_contract.py` **33/33** |
-
-> 里程碑、任务池与验收状态的**唯一事实源**是 [`docs/plan/project-progress.md`](docs/plan/project-progress.md)。
-
----
-
 ## 这个应用解决什么
 
 三条设计来自真实实测（见 [`docs/tech/research/`](docs/tech/research/)），不是设想：
@@ -57,28 +41,33 @@
 
 ```
 WebSR/
-├── data/                  # 【应用数据】可读写、可打包、可迁移
-│   ├── models/            #   模型文件（.onnx + OpenVINO IR 子目录 ir/）—— 随仓库提供，只读
+├── server/                # 后端（FastAPI）：API + SSE + 推理引擎
+├── web/                   # 前端（Vue 3 + Vite + TypeScript）
+├── data/                  # 【应用数据】本地资产，不入版本库
+│   ├── models/            #   模型文件（.onnx + OpenVINO IR 子目录 ir/）
 │   ├── uploads/           #   用户上传原图      ┐
-│   ├── outputs/           #   超分 / 修复结果   │ 运行期创建，
-│   ├── thumbs/            #   预览缩略图        │ 不进版本库
+│   ├── outputs/           #   超分 / 修复结果   │ 运行期创建
+│   ├── thumbs/            #   预览缩略图        │
 │   ├── calibration/       #   自标定记录与硬件指纹缓存 ┘
-│   └── app.db             #   SQLite 元信息库（运行时创建）
+│   └── app.db             #   SQLite 元信息库
 ├── docs/                  # 文档（见下方「文档地图」）
+├── scripts/               # 验证脚本（端到端 / 画质 / 异常 / 验收）
 ├── tools/                 # 基准与探测脚本（开发期工具，不参与应用运行时）
-├── web/                   # 前端（Vue 3 + Vite + TS）—— ✅ 已创建（步骤 5C）
-├── server/                # 后端（FastAPI）—— ✅ 已创建（步骤 5D：骨架 T-601~T-609 + 引擎核心 T-802~T-807）
-├── .venvs/                # 隔离的 Python 推理环境（不进版本库）
-└── .workbuddy/            # 工具链数据：项目记忆 + 基准结果
+├── .venvs/                # 隔离的 Python 推理环境（约 7 GB，不入版本库）
+├── start-dev.bat          # 一键启动前后端（附端口占用自检）
+├── start-backend.bat      # 仅启动后端
+└── stop-dev.bat           # 按端口停止开发服务
 ```
 
-**三条边界**：① `data/`（应用数据，可迁移）↔ `.workbuddy/`（工具链数据）；② `web/` + `server/`（应用代码）↔ `tools/`（开发工具）；③ `.venvs/sr-app`（应用依赖）↔ `sr-gpu` / `sr-ov` / `sr-ovep`（基准验证环境，**应用不得污染**）。
+**三条边界**：① `data/`（应用数据）↔ `.workbuddy/`（工具链数据，不交付）；② `web/` + `server/`（应用代码）↔ `tools/` + `scripts/`（开发工具）；③ `.venvs/sr-app`（应用依赖）↔ `sr-gpu` / `sr-ov` / `sr-ovep`（基准验证环境，**应用不得污染**）。
+
+> `data/` 与 `.workbuddy/` **均不在版本库内**（前者是本地资产，后者是工具链产物），克隆后需自行补齐，见下方说明。
 
 ---
 
 ## 快速开始
 
-> ✅ `web/` 与 `server/` **均已可运行，且前端已接真实后端**（Mock 层已于 `T-701` 整体删除，**无运行期模拟回退**）。开发期由 Vite `server.proxy` 把 `/api` 转发到 `127.0.0.1:8000`，故**两个都要起**；后端沿用 `.venvs/sr-app`（须先按 [`docs/tech/dev-info.md`](docs/tech/dev-info.md) §3 准备环境）。下列命令均可执行。
+> 前端**已无 Mock 层**，开发期由 Vite `server.proxy` 把 `/api` 转发到 `127.0.0.1:8000`，故**前后端都要起**。
 
 **前置条件**
 
@@ -87,41 +76,72 @@ WebSR/
 - Python 3.13 + [`uv`](https://docs.astral.sh/uv/)
 - 显卡可选：有 NVIDIA 走 CUDA；有 Intel GPU 走 OpenVINO 原生；都没有则降级 CPU 并**明确告知**
 
-**后端**
+**① 准备 Python 环境**（项目内隔离环境，严禁全局安装）
+
+```bash
+# 在 server/ 目录下执行，环境落在项目根的 .venvs/sr-app
+set UV_PROJECT_ENVIRONMENT=<项目根>/.venvs/sr-app
+uv sync
+```
+
+**② 启动后端**（`http://127.0.0.1:8000`）
 
 ```bash
 cd server
-uv sync
-uv run uvicorn app.main:app --reload --port 8000
+uv run --active uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-**前端**
+> ⚠️ **必须单 worker，禁止 `--workers`**：任务队列是进程内的，多 worker 会导致任务状态不一致。
+
+**③ 启动前端**（`http://127.0.0.1:5173`）
 
 ```bash
 cd web
 npm install
-npm run dev        # http://127.0.0.1:5173
+npm run dev
 ```
 
-> 约定端口被占用时**不要**自动换端口：先识别占用进程归属并处理（见 `docs/rules/project-rules.md` §2.4）。
+Windows 下也可直接双击项目根目录的 `start-dev.bat`（会检查端口占用并分别开窗口）。
+
+> 约定端口被占用时**不要**自动换端口：先识别占用进程归属并处理（见 [`docs/rules/project-rules.md`](docs/rules/project-rules.md) §2.4）。
 
 ---
 
 ## 模型资产
 
-`data/models/`（约 316 MB）随仓库提供：
+**内置 7 项**（`data/models/`，本地资产、不随仓库分发）：
 
-| 文件 | 说明 |
+| 倍率 | 模型 | 说明 |
+|---|---|---|
+| ×4 | `RealESRGAN_x4plus` | 通用写实（RRDBNet） |
+| ×4 | `RealESRGAN_x4plus_fp16` | 通用写实 fp16 |
+| ×4 | `RealESRGAN_x4`（OpenVINO IR） | 通用写实，需 `uv pip install openvino` |
+| ×4 | `RealESRGAN_x4plus_anime_6B` | 动漫风格 |
+| ×4 | `realesr-general-x4v3` | 轻量通用（SRVGGNetCompact） |
+| ×2 | `RealESRGAN_x2plus` | 通用写实 ×2 |
+| ×3 | `RealCUGAN_up3x` | 动漫 ×3 |
+
+另有若干**基准资产**（`_fp16all` / `_s512` 等技术变体）刻意不登记为内置项。
+
+**克隆后如何补齐模型** —— `data/models/` 不随仓库分发，三条途径：
+
+1. **应用内下载（推荐）**：启动后到「模型库」页，下载目录内置 **10 个已实测可用的模型**（×4:2 / ×2:4 / ×1:3），下载后自动转为 ONNX；
+2. **手工拷贝**：把 `.onnx` 放进 `data/models/`（内置）或 `data/models/imported/`（用户导入）；
+3. **自行转换**：`.pth` / `.safetensors` 是训练权重格式，需先转 ONNX 才能使用。
+
+详见 [`docs/setup/first-run-model-setup.md`](docs/setup/first-run-model-setup.md)。
+
+### ×1 = 修复，不是放大
+
+下载目录中的三条 `1x*` 模型**输出尺寸与输入完全相同**，只修复画质：
+
+| 模型 | 适用 |
 |---|---|
-| `RealESRGAN_x4.onnx` | 主模型 / 通用写实（RRDBNet，16,697,987 参数，opset 17，动态 H/W） |
-| `RealESRGAN_x4plus_anime_6B.onnx` | 动漫风格（RRDBNet 6 块，4,467,779 参数） |
-| `realesr-general-x4v3.onnx` | 轻量通用（SRVGGNetCompact，1,213,296 参数） |
-| `RealESRGAN_x4_fp16.onnx` / `_fp16all.onnx` / `_s512.onnx` | 精度与静态-shape 变体（**基准资产，刻意不登记为内置项**） |
-| `ir/` | OpenVINO IR（fp32 / fp16，`.xml` + `.bin` 成对） |
-| `inspect.json` | 模型结构检查结果 |
+| `1xDeNoise_realplksr_otf` | 去噪点（夜景高感光度、老照片颗粒） |
+| `1xDeJPG_realplksr_otf` | 去静态 JPEG 压缩痕（反复保存/转发的图） |
+| `1xDeH264_realplksr` | 去视频编码痕（录屏、视频/直播截图） |
 
-> **产品内置登记 5 项** = 3 风格 + 2 技术变体：通用/写实 `RealESRGAN_x4`、动漫 `anime_6B`、轻量通用 `realesr-general-x4v3`，外加 `_fp16` 与 IR fp16 对。**风格由「模型」区分，参数面板刻意不设风格开关**。
-> ⚠️ 内置 5 个**全是 `scale=4`** → ×2 / ×3 倍数暂无对应权重；人脸修复（F-14）属 S3。
+UI 中该倍率标注为「**×1 修复**」，提示明确写「不改变尺寸，只修复画质」。
 
 **许可证**：Real-ESRGAN 为 **BSD-3-Clause，可商用**。
 ⚠️ **Upscayl 内置的 Remacri / Ultramix / Ultrasharp 为非商用许可，禁止打包进本仓库。**
@@ -134,14 +154,15 @@ npm run dev        # http://127.0.0.1:5173
 |---|---|---|
 | 项目规则 | [`docs/rules/project-rules.md`](docs/rules/project-rules.md) | **硬性约束与领域铁律，动手前必读** |
 | 需求文档 | [`docs/prd/prd.md`](docs/prd/prd.md) | 功能边界、优先级、档位矩阵、验收标准 |
-| 技术架构 | [`docs/tech/tech-arch.md`](docs/tech/tech-arch.md) | 分层、模块边界、数据模型、API 与 SSE 规范、引擎五阶段 |
+| 技术架构 | [`docs/tech/tech-arch.md`](docs/tech/tech-arch.md) | 分层、模块边界、数据模型、API 与 SSE 规范、引擎结构 |
 | 架构决策 | [`docs/tech/arch/`](docs/tech/arch/) | ADR-001~006 |
 | 环境信息 | [`docs/tech/dev-info.md`](docs/tech/dev-info.md) | 技术栈、版本、端口、环境变量 |
-| API 契约 | [`docs/tech/api-contract.md`](docs/tech/api-contract.md) | 端点、统一错误体（**20 码**）、SSE 事件定义（**`v1.0.2 · 已冻结`**，`T-700` / 2026-10-10 定稿；`T-703` 澄清 `available` 语义、`T-901` 落地档位模拟口径，**均不改字段集**） |
-| 前端原型 | [`docs/prototype/`](docs/prototype/) | **设计 token 唯一来源**（`tokens.css`）+ 6 份规范文档 + 9 张页面图 |
-| 阶段任务文档 | [`docs/plan/tasks/`](docs/plan/tasks/) | 各里程碑阶段的执行细节与验证结果（M3/M4/M5/M6） |
-| 前置调研 | [`docs/tech/research/`](docs/tech/research/) | 6 份调研与实测报告（含 P0 实测证据） |
-| 项目进度 | [`docs/plan/project-progress.md`](docs/plan/project-progress.md) | **调度状态唯一事实源** |
+| API 契约 | [`docs/tech/api-contract.md`](docs/tech/api-contract.md) | 端点、统一错误体（**20 码**）、SSE 事件定义（**v1.0.3 已冻结**） |
+| 首次运行 | [`docs/setup/first-run-model-setup.md`](docs/setup/first-run-model-setup.md) | **克隆后补齐模型的完整步骤** |
+| 前端原型 | [`docs/prototype/`](docs/prototype/) | **设计 token 唯一来源**（`tokens.css`）+ 规范文档 + 页面图 |
+| 前置调研 | [`docs/tech/research/`](docs/tech/research/) | 调研与实测报告 |
+| 阶段任务 | [`docs/plan/tasks/`](docs/plan/tasks/) | 各里程碑阶段的执行细节 |
+| 项目进度 | [`docs/plan/project-progress.md`](docs/plan/project-progress.md) | 调度状态唯一事实源 |
 
 ---
 
@@ -150,7 +171,7 @@ npm run dev        # http://127.0.0.1:5173
 完整约束见 [`docs/rules/project-rules.md`](docs/rules/project-rules.md)。
 
 - **严禁全局安装**：Python 环境、包、模型一律留在项目内（`.venvs/`、`data/models/`）
-- **推理出口唯一**：任何推理必须经 M2 引擎，业务代码不得自行创建推理会话
+- **推理出口唯一**：任何推理必须经引擎层，业务代码不得自行创建推理会话
 - **模型目录只读**：`data/models/` 的任何运行期写入都是不允许的
 - 环境变量三份：`.env.example`（示例）、`.env.dev`（开发）、`.env.prd`（**不跟踪**）
 - 服务绑 `127.0.0.1`；CORS 禁止 `*`
