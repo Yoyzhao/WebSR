@@ -17,7 +17,7 @@
 | `max_concurrency` | **已保存但尚未生效**：执行器并发恒为 1（保底档），开放并发属 G-06（T-907） |
 | `log_level` | 立即（重设进程内 root logger）；重启后由启动序列按落库值重设 |
 | `simulation_enabled` | **已保存但尚未生效**：档位模拟开关属 P3（T-901） |
-| `calibration_state` | **只读派生**：自标定属 S2（T-805），无有效标定记录时恒 `pending` |
+| `calibration_state` | **只读派生**（阶段 C / T-805 已实现）：无有效标定记录时为 `pending` |
 
 ⚠️ 有意不做的两件事：路径类改动**不迁移既有文件**、**不重开已有文件句柄** ——
 迁移 / 重开会让运行中的任务与已落库记录失去一致性（风险远大于收益）。
@@ -182,7 +182,7 @@ def _default(key: str) -> str:
 
 
 def _calibration_state() -> str:
-    """有有效标定记录才算 done（自标定属 S2，T-805 接入后此逻辑即自动生效）。"""
+    """有有效标定记录才算 done（阶段 C / T-805 已接入，此逻辑已在线上生效）。"""
     try:
         s = get_session()
         try:

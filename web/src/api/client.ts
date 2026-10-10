@@ -231,7 +231,10 @@ export async function fetchCapabilities(): Promise<Capabilities> {
   return request<Capabilities>('/system/capabilities')
 }
 
-/** 触发首启自标定（异步，立即返回作业号）。标定端点属 S2，但机制已就绪。 */
+/**
+ * 触发标定（异步，立即返回作业号）。
+ * 阶段 C / T-805 已落地：结果会按「硬件指纹 + 模型」被引擎决策层消费。
+ */
 export async function triggerCalibration(): Promise<{ started: boolean; task_id?: string; status?: string }> {
   return request('/system/calibrate', { method: 'POST' })
 }

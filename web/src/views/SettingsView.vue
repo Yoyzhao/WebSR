@@ -223,7 +223,10 @@ onMounted(load)
     <!-- 标定 -->
     <SectionCard title="参数标定" subtitle="标定结果决定「自动档」下 tile / 精度 / 后端的取值">
       <SettingsRow label="标定状态" :value="get('calibration_state', 'pending') === 'pending' ? '未完成（当前使用保底档）' : '已完成'" mono />
-      <SettingsRow label="说明" value="首启自标定属 S2 阶段；当前所有自动档任务均使用保守下界参数，并在界面明确标注。" />
+      <SettingsRow
+        label="说明"
+        value="标定按「硬件指纹 + 模型」匹配：命中的模型在自动档下使用本机实测推荐参数；未标定的模型退回保底档保守下界参数，并在任务详情中显式标注来源。"
+      />
       <template #footer>
         <div class="st-foot">
           <span class="st-foot-hint">标定需要在本机实际跑一轮推理，可能耗时数十秒</span>

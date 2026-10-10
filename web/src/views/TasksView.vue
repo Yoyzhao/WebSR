@@ -110,8 +110,14 @@ async function onAction({ key, id }: { key: string; id: string }) {
       cancelButtonText: '继续执行',
       type: 'warning',
     })
-    await taskStore.cancel(id)
-    return ElMessage.info('任务已取消')
+    // ⚠️ 必须兜住：任务可能在这几秒内**已经结束**，此时后端返回 409 TASK_CANCELED。
+    //    不兜住会变成未处理的 Promise 拒绝 —— 界面毫无反馈，用户以为点了没反应。
+    try {
+      await taskStore.cancel(id)
+      return ElMessage.info('任务已取消')
+    } catch (e) {
+      return ElMessage.warning((e as Error).message || '取消失败')
+    }
   }
   if (key === 'retry') {
     // S2 阶段能力；后端契约 v1.0 无重试端点 —— 界面入口已禁用

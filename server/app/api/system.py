@@ -5,7 +5,7 @@
 - `GET  /api/system/calibration`：标定记录、推荐档位与理由。
 - `GET  /api/system/diagnostics`：诊断 JSON 附件下载（PRD §3.4）。
 
-标定端点属 **S2**（T-805）。`POST /calibrate` 触发的是**后台线程**，接口本身不阻塞——
+标定（阶段 C / T-805）**已实现**。`POST /calibrate` 触发的是**后台线程**，接口本身不阻塞——
 标定要吃满 GPU 数秒，同步等待会顶穿前端超时。
 """
 import json

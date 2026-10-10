@@ -81,7 +81,7 @@ def decide_for_task(params: dict | None, model: Model | None) -> RuntimeProfile:
 
     标定记录按 `(模型, 硬件指纹)` 精确取；能力快照走 `system_info` 的同一份进程内缓存，
     **不重跑**阶段 A/B。标定取数会比快照多读一次库（快照用的是"通用记录"口径），
-    但表在 S2 前恒为空，代价是常数级。
+    但该表只按「模型 × 硬件指纹」增长，单机规模是常数级。
     """
     try:
         caps, details = system_info.get_capability_snapshot()

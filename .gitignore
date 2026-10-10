@@ -104,6 +104,17 @@ web/*.tsbuildinfo
 .workbuddy/verify/t807/RealESRGAN_x4.pth
 .workbuddy/verify/t807/*.onnx
 
+# ---- T-702 浏览器级 UI 端到端验证产物 ----
+# `.workbuddy/verify/ui/` 是一个**可重复运行**的独立验证件：
+#   run_ui_e2e.cjs（脚本）+ fixtures/（两张夹具图，合计 < 40 KB）入库；
+#   shots/ 下的截图入库（与 .workbuddy/verify/shots/ 同一惯例），供人眼核对；
+# 唯独**运行期下载产物**不入库：结果图 ~1.3 MB、诊断 JSON 每次不同，均可一条命令重建。
+.workbuddy/verify/ui/shots/06-download-*
+.workbuddy/verify/ui/shots/10-diagnostics.json
+
+# ---- 工具链临时目录（脚本/会话的中间产物，可随时重建，不入库）----
+.workbuddy/tmp/
+
 # ---- 验证脚本的原始运行日志（可随时重跑生成，不入库）----
 # 保留了 `regress_*.txt`（跨任务全量回归摘要，高信噪比证据）。
 .workbuddy/verify/*_run.txt

@@ -51,7 +51,11 @@ async function runCalibration() {
   calibrating.value = true
   try {
     await system.calibrate()
-    ElMessage.success('标定任务已触发（首启自标定属 S2 阶段，当前仍使用保底档）')
+    // 阶段 C（T-805）已落地：标定不再是 S2 占位能力，结果会被引擎决策层按
+    // 「硬件指纹 + 模型」自动消费。
+    // ⚠️ 本页目前**没有**标定结果区块（原型 P4 未定义该区块）；
+    //    故文案不得宣称"可在此查看曲线"——那会是一句骗人的话。
+    ElMessage.success('标定已触发；完成后「自动档」将按本机实测结果取值')
   } finally {
     calibrating.value = false
   }

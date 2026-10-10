@@ -226,8 +226,13 @@ async function onTaskAction({ key, id }: { key: string; id: string }) {
       cancelButtonText: '继续执行',
       type: 'warning',
     })
-    await taskStore.cancel(id)
-    ElMessage.info('任务已取消')
+    // 同 TasksView：任务可能已在这几秒内结束（后端 409）—— 必须给出反馈，不能静默失败
+    try {
+      await taskStore.cancel(id)
+      ElMessage.info('任务已取消')
+    } catch (e) {
+      ElMessage.warning((e as Error).message || '取消失败')
+    }
     return
   }
   if (key === 'retry') {

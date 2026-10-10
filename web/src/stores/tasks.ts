@@ -18,6 +18,9 @@ export const useTaskStore = defineStore('tasks', () => {
   const loading = ref(false)
   const activeTaskId = ref<string | null>(null)
 
+  /** 终态集合（契约 §3.1：服务端 7 值，无 `pending`）—— 终态任务不再需要 SSE */
+  const TERMINAL = new Set(['completed', 'canceled', 'failed', 'interrupted'])
+
   /** taskId → 取消订阅函数 */
   const subscriptions = new Map<string, () => void>()
 
@@ -101,8 +104,20 @@ export const useTaskStore = defineStore('tasks', () => {
   async function cancel(id: string): Promise<void> {
     const next = await cancelTask(id)
     patch(next)
-    subscriptions.get(id)?.()
-    subscriptions.delete(id)
+    // ⚠️ 这里**不能**无条件退订（T-702 浏览器补测实测出的真实缺陷）。
+    //
+    // 取消是**协作式**的（api-contract §4.1 + `tasks/manager.cancel`）：
+    //   - `queued` 任务：后端直接终态化为 `canceled` 并广播 `done`；
+    //   - `running` 任务：后端只置中间态 `canceling`，真正的终态 `canceled`
+    //     由工作线程在块间自检后写入，再过 `_publish_done` 广播 `done`。
+    // 若在此处立即 `es.close()`，第二条 `done` 就永远收不到 —— 界面会**永久停在
+    //「正在取消」，且不再有任何自更新途径**（除非用户手动刷新页面）。
+    // 正确做法：把退订交给既有的 `onDone` 收口（它本就在终态帧后关闭连接）。
+    // 仅当取消响应本身已是终态（`queued` 那条路径）时，才由这里直接收口。
+    if (TERMINAL.has(next.status)) {
+      subscriptions.get(id)?.()
+      subscriptions.delete(id)
+    }
   }
 
   /** 主动重新拉取单个任务（详情抽屉打开时兜底同步一次） */

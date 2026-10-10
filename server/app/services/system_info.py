@@ -10,9 +10,10 @@
 本模块只做**取数 + 组装成契约形状**，不含任何探测逻辑——
 这样"探测来源"换实现时（例如将来加 Intel 路径）本模块无需改动。
 
-**保底语义**：阶段 C（自标定）属 S2，尚未落地 → `using_fallback` 恒 true、
-`active_precision` 恒 fp32（§6.8）。诊断 JSON 满足"一键导出即可解释为什么他慢/崩"
-（跨环境设计文档 §9）。
+**保底语义**：阶段 C（自标定）**已落地**（T-805）。本模块的 `using_fallback` 是
+**快照口径**（按"通用记录"取数）—— 无通用标定记录时为 true，`active_precision` 随之为
+保底档取值（§6.8）；**任务级**口径以 `resolved.source` 为准。诊断 JSON 满足"一键导出即可
+解释为什么他慢/崩"（跨环境设计文档 §9）。
 """
 from __future__ import annotations
 
@@ -57,7 +58,7 @@ def read_calibration_view(
 
     匹配规则：先精确匹配 `model_id`，再退到"通用记录"（`model_id is NULL`）。
     **指纹不符的完全不看**——失效判据是硬件指纹，不是时间（与 EP 缓存同一纪律）。
-    表在 S2 前恒为空，故当前线上永远返回 None → 走保底档。
+    取不到匹配记录时返回 None → 决策层**退回保底档保守下界**（不猜测，见 `decide_profile`）。
     """
     if not fingerprint:
         return None
@@ -214,7 +215,8 @@ def build_diagnostics() -> dict:
         "calibration": {
             "state": cal_state,
             "records": cal_records,
-            "note": "首启自标定属 S2（T-805），当前使用保底档（§6.8）",
+            "note": "首启自标定（阶段 C / T-805）已实现：按「硬件指纹 + 模型」匹配，命中即用实测参数，"
+                    "未命中退回保底档保守下界；此处仅导出记录，任务级来源见 resolved.source",
         },
         # ↓ 阶段 D/E（T-804）：决策产物 + 水位反馈
         "decision": decision,
