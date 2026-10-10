@@ -34,7 +34,7 @@
 | M3 | `tasks/M3/STEP-4.md` | ✅ 已建立 |
 | M4 | `tasks/M4/STEP-5A.md` | ✅ 已建立（**5B 不单开**，收口结论见 `project-progress.md` §3 M4 任务池） |
 | M5 | `tasks/M5/STEP-5C.md`、`tasks/M5/STEP-5D.md` | ✅ 已建立 |
-| M6 | `tasks/M6/STEP-6.md`、`tasks/M6/STEP-7.md` | `STEP-6.md` ✅ 已建立（`T-700` 时）；`STEP-7.md` 进入步骤 7 时建立 |
+| M6 | `tasks/M6/STEP-6.md`、`tasks/M6/STEP-7.md` | `STEP-6.md` ✅ 已建立（`T-700` 时）；`STEP-7.md` ✅ **已建立（2026-10-10，`T-703` 归档时）** |
 | M7 | `tasks/M7/STEP-8.md`、`tasks/M7/STEP-9.md` | 进入 8 / 9 时 |
 
 > 依据 `fullstack-general` 的「建立阶段文档的条件」：阶段文档在该阶段**需要任务拆解或执行时**建立。**不预先创建空壳文档**——未进入的阶段没有真实方案可写，空壳只会与后续实际方案冲突。
