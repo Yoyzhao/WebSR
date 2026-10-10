@@ -19,16 +19,65 @@ import ActionButtons from '@/components/ActionButtons.vue'
 import SegmentedControl from '@/components/SegmentedControl.vue'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { exportDiagnostics, fetchLogs, fetchSettings, fetchTasks, saveSettings } from '@/api/client'
+import { useSystemStore } from '@/stores/system'
 import { PAGE_MAX_WIDTH, UPLOAD } from '@/constants'
 import type { LogEntry, Setting } from '@/types/api'
 
 const { mode, setMode } = useTheme()
+const system = useSystemStore()
 
 const settings = ref<Setting[]>([])
 const loading = ref(true)
 const saving = ref(false)
 const logs = ref<LogEntry[]>([])
 const logsOpen = ref(false)
+
+/**
+ * 档位模拟（T-901）—— **开发者设置**（PRD §2.3 原则 4 要求"必须放在开发者设置中"）。
+ *
+ * 它是**服务端**能力：提交后档位判定、模型可用性门控、EP 候选链与任务决策输入都会按声明值走。
+ * 因此这里不做任何本地推断——提交完就重新拉服务端结果。
+ */
+const simTier = ref('T2')
+const simVram = ref('')
+const simTensorrt = ref('')
+
+function syncSimDraft() {
+  simTier.value = system.simDraft.forceTier || 'T2'
+  simVram.value = system.simDraft.forceVramMb
+  simTensorrt.value = system.simDraft.forceTensorrt
+}
+
+async function applySimulation(enabled: boolean) {
+  try {
+    await system.applySimulation({
+      enabled,
+      forceTier: simTier.value,
+      forceVramMb: simVram.value.trim(),
+      forceTensorrt: simTensorrt.value,
+    })
+    await load() // 设置表已变（模拟四项），刷新本页展示值
+    ElMessage.warning(enabled ? '档位模拟已开启（服务端生效）' : '已关闭档位模拟，恢复真实探测值')
+  } catch (e) {
+    ElMessage.error((e as Error).message || '档位模拟设置失败')
+    syncSimDraft()
+  }
+}
+
+/** 开启状态下改动任一强制项 → 立即重新提交（关闭状态下只改草稿，不动服务端） */
+function changeSimField() {
+  if (system.simDraft.enabled) void applySimulation(true)
+}
+
+function changeSimTier(v: string) {
+  simTier.value = v
+  changeSimField()
+}
+
+function changeSimTensorrt(v: string) {
+  simTensorrt.value = v
+  changeSimField()
+}
 
 /** 本地草稿：避免每次输入都打接口，统一由「保存」提交 */
 const draft = reactive<Record<string, string>>({})
@@ -89,6 +138,11 @@ async function resetDefaults() {
     max_upload_mb: String(UPLOAD.maxSizeMB),
     max_concurrency: '1',
     log_level: 'info',
+    // 档位模拟（T-901）：默认 = 总闸关、三项都不声明
+    simulation_enabled: 'false',
+    force_tier: '',
+    force_vram_mb: '',
+    force_has_tensorrt: '',
   }
   Object.entries(defaults).forEach(([k, v]) => set(k, v))
   ElMessage.info('已填入默认值，点击「保存配置」生效')
@@ -113,7 +167,11 @@ function onAction(key: string) {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  await system.loadSimulationDraft()
+  syncSimDraft()
+})
 </script>
 
 <template>
@@ -231,6 +289,76 @@ onMounted(load)
         <div class="st-foot">
           <span class="st-foot-hint">标定需要在本机实际跑一轮推理，可能耗时数十秒</span>
           <RouterLink to="/hardware" class="st-textbtn">前往硬件能力页标定 →</RouterLink>
+        </div>
+      </template>
+    </SectionCard>
+
+    <!-- 档位模拟（开发者设置，T-901）
+         PRD §2.3 原则 4：模拟开关**必须放在开发者设置中**，并显式提示"不代表真实能力"。 -->
+    <SectionCard title="档位模拟（开发者）" subtitle="在低档位机器上真实执行高/低档位的代码路径">
+      <SettingsRow
+        label="模拟开关"
+        :hint="
+          system.simDraft.enabled
+            ? '已开启（服务端生效）：档位判定、模型门控、EP 候选链与任务决策都按声明值执行'
+            : '关闭时一切按本机真实探测值执行'
+        "
+      >
+        <SegmentedControl
+          :model-value="system.simDraft.enabled ? 'on' : 'off'"
+          :options="[
+            { label: '关闭', value: 'off' },
+            { label: '开启', value: 'on' },
+          ]"
+          size="sm"
+          @update:model-value="applySimulation($event === 'on')"
+        />
+      </SettingsRow>
+
+      <SettingsRow label="目标档位" hint="T0 纯 CPU / T1 消费级 8G / T2 高端 16–24G / T3 专业卡">
+        <SegmentedControl
+          :model-value="simTier"
+          :options="[
+            { label: 'T0', value: 'T0' },
+            { label: 'T1', value: 'T1' },
+            { label: 'T2', value: 'T2' },
+            { label: 'T3', value: 'T3' },
+          ]"
+          size="sm"
+          @update:model-value="changeSimTier($event)"
+        />
+      </SettingsRow>
+
+      <SettingsRow label="声明可用显存" hint="填 MB（24576）或带 G 后缀（24G）；留空 = 不声明">
+        <input
+          class="st-input st-mono"
+          type="text"
+          placeholder="例如 24G"
+          :value="simVram"
+          @input="simVram = ($event.target as HTMLInputElement).value"
+          @change="changeSimField"
+        />
+      </SettingsRow>
+
+      <SettingsRow label="TensorRT 能力" hint="把 TensorRT 加入 EP 候选链（消费方为 G-04 / T-909）">
+        <SegmentedControl
+          :model-value="simTensorrt"
+          :options="[
+            { label: '不声明', value: '' },
+            { label: '声明可用', value: 'true' },
+            { label: '声明不可用', value: 'false' },
+          ]"
+          size="sm"
+          @update:model-value="changeSimTensorrt($event)"
+        />
+      </SettingsRow>
+
+      <template #footer>
+        <div class="st-foot">
+          <span class="st-foot-hint">
+            模拟档位仅用于测试，不代表真实能力 —— 它只覆盖判定输入，不伪造硬件事实
+          </span>
+          <RouterLink to="/hardware" class="st-textbtn">查看硬件能力页 →</RouterLink>
         </div>
       </template>
     </SectionCard>

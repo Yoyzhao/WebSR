@@ -4,7 +4,9 @@
  *
  * 约束（PRD §7.2 / v1.8 模型不做自动推荐）：
  *   - 模型**始终由用户选择**，卡片不展示"推荐"字样，不做排序干预。
- *   - 跑不动的模型按「当前档位」置灰并**说明原因**（依据 `min_vram_mb` 与实读可用显存）。
+ *   - 跑不动的模型按「当前档位」置灰并**说明原因**——判据**只**取服务端 `ModelOut.available`
+ *     与 `unavailable_reason`（契约 §3.2：服务端已按「登记态 → 运行时 → 显存门槛」三级裁定）。
+ *     前端**不得**再用真实可用显存二次判断，否则档位模拟（T-901）时会把模型错误置灰。
  *   - 置灰 = `disabled`，且必须给出 `disabledReason`；禁用态透明度 0.55（01 §5）。
  *   - `supported_backends` 含 ncnn 时按「条件支持」表述（Windows/Python 可用性未验证，T-210）。
  */
@@ -16,10 +18,6 @@ import { toModelVM } from '@/utils/viewModel'
 
 const props = defineProps<{
   model: Model
-  /** 当前实读可用显存（GB）；null 表示未探测到 */
-  availableVramGb: number | null
-  /** 当前档位标签，用于置灰文案 */
-  tierLabel?: string
 }>()
 
 const emit = defineEmits<{
@@ -27,7 +25,7 @@ const emit = defineEmits<{
   (e: 'delete', id: string): void
 }>()
 
-const vm = computed(() => toModelVM(props.model, props.availableVramGb, props.tierLabel))
+const vm = computed(() => toModelVM(props.model))
 
 function onUse() {
   if (vm.value.disabled) return

@@ -24,6 +24,7 @@ from ..engine.availability import probe_hardware_snapshot
 from ..schemas.model import ModelOut
 from ..services import conversion_service
 from ..services import model_registry as reg
+from ..services import simulation as simulation_service
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -34,7 +35,9 @@ _BACKENDS = {"cpu", "cuda", "openvino", "tensorrt", "ncnn"}
 def list_models(format: str | None = Query(default=None)) -> list[ModelOut]:
     s = get_session()
     try:
-        return reg.list_models(s, probe_hardware_snapshot(), fmt=format)
+        return reg.list_models(
+            s, probe_hardware_snapshot(simulation=simulation_service.current()), fmt=format
+        )
     finally:
         s.close()
 
@@ -92,7 +95,9 @@ async def import_model(
                 companion_tmp=companion_tmp,
                 companion_filename=companion_file.filename if companion_file else None,
             )
-            return reg.serialize_model(model, probe_hardware_snapshot())
+            return reg.serialize_model(
+                model, probe_hardware_snapshot(simulation=simulation_service.current())
+            )
         finally:
             s.close()
     finally:

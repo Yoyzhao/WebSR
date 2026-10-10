@@ -31,6 +31,7 @@ from ..engine.runtime_profile import (
 )
 from ..models.entities import Model
 from . import system_info
+from . import simulation as simulation_service
 
 logger = logging.getLogger("websr.services.engine_decision")
 
@@ -85,7 +86,12 @@ def decide_for_task(params: dict | None, model: Model | None) -> RuntimeProfile:
     """
     try:
         caps, details = system_info.get_capability_snapshot()
-        facts = get_facts()
+        # T-901：决策按**模拟视图**的硬件事实执行（只覆盖"可用显存"这一项判定输入）。
+        # 真实的 `DeviceFacts` 一个字都不改——诊断导出里仍能看到真相。
+        # 标定匹配仍用**真实**硬件指纹：标定结论是在真实硬件上测出来的，
+        # 拿模拟档位去匹配只会得到一份不属于这台机器的参数。
+        sim = simulation_service.current()
+        facts = sim.apply_to_facts(get_facts())
         fingerprint = details.get("hardware_fingerprint")
         adopted = list(details.get("adopted_backends") or [])
         cal = system_info.read_calibration_view(fingerprint, model.id if model else None)
@@ -101,6 +107,10 @@ def decide_for_task(params: dict | None, model: Model | None) -> RuntimeProfile:
         )
         if constraint_note and constraint_note not in profile.reasons:
             profile.reasons.append(constraint_note)
+        if sim.active:
+            # 任务自己把"当时在模拟态"写进 reasons：事后看任务详情就能解释
+            # "为什么这台 8G 卡跑出了 T2 的参数"（契约 §8：文案可追加）
+            profile.reasons.append(sim.reason_line())
         profile = _apply_water_level_downgrade(profile, adopted=adopted, align=align)
         _remember(profile, caps.get("tier"))
         return profile

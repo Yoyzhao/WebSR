@@ -11,12 +11,12 @@
 | 项 | 值 |
 |---|---|
 | **进度** | **M0–M5 全部完成**（M1/M2/M3 已验收；M4 前端原型已收口；M5 步骤 5C **已验收**、5D 已判定收口）｜**M6 进行中** |
-| 当前阶段 | **M6 步骤 6/7（前后端整合 → 系统联调）** —— 🔵 **进行中**；**S1 主链路已真机打通且画质已验收**（`T-700` 契约 v1.0 ✅ → `T-701` Mock 退场 ✅ → `T-702` 全链路 ✅ + **Playwright 浏览器级补测 ✅ 81/81** → **`T-703` 画质与接缝验收 ✅ 38/38**） |
-| 下一步 | **`T-704`**（异常与降级链联调：OOM 降档 / EP 回退 / 保底档可见，P0）—— ⚠️ 隐性前置：真机 T1（7.1 GB 可用显存）**造不出 OOM 触发条件**，需先做 `T-901` 档位模拟（`force_vram`）才能真实走一遍降档链 |
+| 当前阶段 | **M6 步骤 6/7（前后端整合 → 系统联调）** —— 🔵 **进行中**；**S1 主链路已真机打通且画质已验收，`T-704` 的隐性前置已解除**（`T-700` 契约 v1.0 ✅ → `T-701` Mock 退场 ✅ → `T-702` 全链路 ✅ + **Playwright 浏览器级补测 ✅ 81/81** → **`T-703` 画质与接缝验收 ✅ 38/38** → **`T-901` 档位模拟开关 ✅ 74/74**） |
+| 下一步 | **`T-704`**（异常与降级链联调：OOM 降档 / EP 回退 / 保底档可见，P0）—— **前置已解除**：`T-901` 档位模拟已落地（`force_tier` / `force_vram` / `force_has_tensorrt`，服务端真实生效），可用 `force_vram` 声明小显存**真实触发**降档链 |
 | 门控 | ✅ **已通过（2026-10-10）**：5D 收口 → `T-700`（契约 v1.0 定稿）→ 真实接口联调（`T-701`/`T-702`）→ 系统联调与画质验收（`T-703`）**均已完成** |
-| 代码目录 | `web/` ✅（15 业务组件 / 6 视图 / **真实 API + SSE 驱动，无 Mock**）｜ `server/` ✅（FastAPI，`T-601`~`T-609` + 引擎核心 `T-802`~`T-807`） |
-| 端到端验证 | `scripts/test-script/verify_t702_e2e.py` —— 覆盖**真实推理路径 + 真实 SSE + 真实产物**：直连 `:8000` **41/41**、经 Vite 代理 `:5173` **43/43**；`scripts/test-script/verify_t703_quality.py` —— 覆盖**画质与接缝验收**（尺寸精确 ×4 / 色彩互换反证 / 多块接缝双跑 / **与官方 ncnn 实现交叉校验 PSNR 38.20 dB**）：**38/38**；全量后端回归 **857 项断言全绿** |
-| 契约状态 | `docs/tech/api-contract.md` = **`v1.0.1 · 已冻结`**（8 个冻结点全 ✅、错误码 **20** 条、新增 `/api/tasks/{task_id}/logs`；v1.0.1 仅**澄清** `ModelOut.available` 语义、**不改变字段集**）；一致性校验 `verify_t700_contract.py` **33/33** |
+| 代码目录 | `web/` ✅（15 业务组件 / 6 视图 / **真实 API + SSE 驱动，无 Mock**）｜ `server/` ✅（FastAPI，`T-601`~`T-609` + 引擎核心 `T-802`~`T-807` + `T-901`） |
+| 端到端验证 | `scripts/test-script/verify_t702_e2e.py` —— 覆盖**真实推理路径 + 真实 SSE + 真实产物**：直连 `:8000` **41/41**、经 Vite 代理 `:5173` **43/43**；`scripts/test-script/verify_t703_quality.py` —— 覆盖**画质与接缝验收**（尺寸精确 ×4 / 色彩互换反证 / 多块接缝双跑 / **与官方 ncnn 实现交叉校验 PSNR 38.20 dB**）：**38/38**；`scripts/test-script/verify_t901_simulation.py` —— 覆盖**档位模拟**（解析 / 档位覆盖 / 门控解禁 / EP 候选链 / 设置层 / HTTP 端到端 / **诚信判据**）：**74/74**；全量回归 **974 项断言全绿** |
+| 契约状态 | `docs/tech/api-contract.md` = **`v1.0.2 · 已冻结`**（8 个冻结点全 ✅、错误码 **20** 条、新增 `/api/tasks/{task_id}/logs`；**v1.0.1 / v1.0.2 均只澄清语义、不改变字段集** —— v1.0.1 澄清 `ModelOut.available`，v1.0.2 落地档位模拟口径）；一致性校验 `verify_t700_contract.py` **33/33** |
 
 > 里程碑、任务池与验收状态的**唯一事实源**是 [`docs/plan/project-progress.md`](docs/plan/project-progress.md)。
 
@@ -137,7 +137,7 @@ npm run dev        # http://127.0.0.1:5173
 | 技术架构 | [`docs/tech/tech-arch.md`](docs/tech/tech-arch.md) | 分层、模块边界、数据模型、API 与 SSE 规范、引擎五阶段 |
 | 架构决策 | [`docs/tech/arch/`](docs/tech/arch/) | ADR-001~006 |
 | 环境信息 | [`docs/tech/dev-info.md`](docs/tech/dev-info.md) | 技术栈、版本、端口、环境变量 |
-| API 契约 | [`docs/tech/api-contract.md`](docs/tech/api-contract.md) | 端点、统一错误体（**20 码**）、SSE 事件定义（**`v1.0.1 · 已冻结`**，`T-700` / 2026-10-10 定稿，`T-703` 澄清 `available` 语义不改字段集） |
+| API 契约 | [`docs/tech/api-contract.md`](docs/tech/api-contract.md) | 端点、统一错误体（**20 码**）、SSE 事件定义（**`v1.0.2 · 已冻结`**，`T-700` / 2026-10-10 定稿；`T-703` 澄清 `available` 语义、`T-901` 落地档位模拟口径，**均不改字段集**） |
 | 前端原型 | [`docs/prototype/`](docs/prototype/) | **设计 token 唯一来源**（`tokens.css`）+ 6 份规范文档 + 9 张页面图 |
 | 阶段任务文档 | [`docs/plan/tasks/`](docs/plan/tasks/) | 各里程碑阶段的执行细节与验证结果（M3/M4/M5/M6） |
 | 前置调研 | [`docs/tech/research/`](docs/tech/research/) | 6 份调研与实测报告（含 P0 实测证据） |

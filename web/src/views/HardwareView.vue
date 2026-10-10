@@ -26,7 +26,10 @@ import type { Capabilities } from '@/types/api'
 
 const system = useSystemStore()
 
-const simForceTier = ref<'T1' | 'T2' | 'T3'>('T2')
+const simForceTier = ref<'T0' | 'T1' | 'T2' | 'T3'>('T2')
+const simVram = ref('')
+const simTensorrt = ref('')
+const simBusy = ref(false)
 const calibrating = ref(false)
 
 const caps = computed<Capabilities | null>(() => system.capabilities)
@@ -61,32 +64,77 @@ async function runCalibration() {
   }
 }
 
+/** 把服务端已保存的模拟声明回填到控件（唯一来源是设置表，不是本地记忆） */
+function syncDraftFromStore() {
+  const d = system.simDraft
+  simForceTier.value = (['T0', 'T1', 'T2', 'T3'].includes(d.forceTier) ? d.forceTier : 'T2') as
+    | 'T0'
+    | 'T1'
+    | 'T2'
+    | 'T3'
+  simVram.value = d.forceVramMb
+  simTensorrt.value = d.forceTensorrt
+}
+
+/**
+ * 提交模拟设置 —— **服务端生效**（档位判定 / 模型门控 / EP 候选链 / 任务决策输入）。
+ * 前端不做任何本地推断，提交后一律以服务端返回的能力快照为准。
+ */
+async function submitSimulation(enabled: boolean) {
+  simBusy.value = true
+  try {
+    await system.applySimulation({
+      enabled,
+      forceTier: simForceTier.value,
+      forceVramMb: simVram.value.trim(),
+      forceTensorrt: simTensorrt.value,
+    })
+  } catch (e) {
+    ElMessage.error((e as Error).message || '档位模拟设置失败')
+    syncDraftFromStore()
+  } finally {
+    simBusy.value = false
+  }
+}
+
 async function toggleSimulation(next: boolean) {
   if (next) {
-    await ElMessageBox.confirm(
-      '档位模拟会强制声明一个高于/低于本机的硬件档位，用于验证高/低档位的界面与参数路径。' +
-        '模拟期间**执行结果不代表真实性能**，仅用于验证代码分支。确认开启？',
-      '开启档位模拟',
-      { confirmButtonText: '确认开启', cancelButtonText: '取消', type: 'warning' },
-    )
-    system.setSimulation(true, simForceTier.value)
-    ElMessage.warning(`已进入档位模拟：强制 ${simForceTier.value}（界面已标注「模拟」）`)
+    try {
+      await ElMessageBox.confirm(
+        '档位模拟会让「服务端」按声明的档位 / 显存执行：档位判定、模型可用性门控、' +
+          'EP 候选链与任务决策都会走模拟值。模拟期间执行结果不代表真实性能，仅用于验证代码分支。确认开启？',
+        '开启档位模拟',
+        { confirmButtonText: '确认开启', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return // 用户取消：什么都不做（控件状态由服务端返回值决定，本就未变）
+    }
+    await submitSimulation(true)
+    ElMessage.warning(`档位模拟已开启（服务端生效）：目标 ${simForceTier.value}`)
   } else {
-    system.setSimulation(false, null)
-    ElMessage.success('已退出档位模拟，恢复真实探测值')
+    await submitSimulation(false)
+    ElMessage.success('已关闭档位模拟，恢复真实探测值')
   }
 }
 
 function changeForceTier(t: string) {
-  simForceTier.value = t as 'T1' | 'T2' | 'T3'
-  if (system.simulating) {
-    system.setSimulation(true, t)
-    ElMessage.info(`模拟档位已切换为 ${t}`)
-  }
+  simForceTier.value = t as 'T0' | 'T1' | 'T2' | 'T3'
+  if (system.simulating) void submitSimulation(true)
 }
 
-onMounted(() => {
-  if (!system.capabilities) system.load()
+function changeTensorrt(v: string) {
+  simTensorrt.value = v
+  if (system.simulating) void submitSimulation(true)
+}
+
+function commitVram() {
+  if (system.simulating) void submitSimulation(true)
+}
+
+onMounted(async () => {
+  if (!system.capabilities) await system.load()
+  await system.loadSimulationDraft()
+  syncDraftFromStore()
 })
 </script>
 
@@ -211,16 +259,21 @@ onMounted(() => {
       </SectionCard>
 
       <!-- 档位模拟 -->
-      <SectionCard title="档位模拟" subtitle="开发期能力 · P3">
+      <SectionCard title="档位模拟" subtitle="开发期能力 · P3 · 服务端生效">
         <div class="hw-sim-warn">
           <el-icon :size="13"><Warning /></el-icon>
           <div>
-            <p class="hw-sim-msg">模拟档位不做真实硬件校验，用于在低档位机器上验证高/低档位的代码分支与界面表现。</p>
-            <p class="hw-sim-sub">开启后所有界面会标注「模拟」，执行结果不代表真实性能，请勿用于评估硬件。</p>
+            <p class="hw-sim-msg">
+              模拟由服务端执行：档位判定、模型可用性门控、EP 候选链与任务决策输入都会按声明的档位 / 显存走。
+            </p>
+            <p class="hw-sim-sub">
+              它只覆盖「判定输入」，不伪造硬件事实——本页设备信息恒为真实探测值；
+              执行结果不代表真实性能，请勿用于评估硬件。同样的开关也在「系统配置」页。
+            </p>
           </div>
         </div>
 
-        <SettingsRow label="模拟开关" :hint="system.simulating ? '当前处于模拟态' : '当前为真实探测值'">
+        <SettingsRow label="模拟开关" :hint="system.simulating ? '当前处于模拟态（服务端已生效）' : '当前为真实探测值'">
           <SegmentedControl
             :model-value="system.simulating ? 'on' : 'off'"
             :options="[
@@ -236,22 +289,53 @@ onMounted(() => {
           <SegmentedControl
             :model-value="simForceTier"
             :options="[
+              { label: 'T0', value: 'T0' },
               { label: 'T1', value: 'T1' },
               { label: 'T2', value: 'T2' },
               { label: 'T3', value: 'T3' },
             ]"
             size="sm"
-            @update:model-value="changeForceTier"
+            @update:model-value="changeForceTier($event)"
           />
         </SettingsRow>
 
         <SettingsRow
-          v-if="system.simulating"
-          label="当前声明"
-          :value="system.tierBadgeText"
-          tone="warning"
-          simulated
-        />
+          label="声明可用显存"
+          hint="用于档位推导与模型置灰；填 MB（如 24576）或带 G 后缀（如 24G），留空 = 不声明"
+        >
+          <input
+            class="hw-input hw-mono"
+            type="text"
+            placeholder="例如 24G"
+            :value="simVram"
+            :disabled="simBusy"
+            @input="simVram = ($event.target as HTMLInputElement).value"
+            @change="commitVram"
+          />
+        </SettingsRow>
+
+        <SettingsRow label="TensorRT 能力" hint="把 TensorRT 加入 EP 候选链（其消费方为 G-04 / T-909）">
+          <SegmentedControl
+            :model-value="simTensorrt"
+            :options="[
+              { label: '不声明', value: '' },
+              { label: '声明可用', value: 'true' },
+              { label: '声明不可用', value: 'false' },
+            ]"
+            size="sm"
+            @update:model-value="changeTensorrt($event)"
+          />
+        </SettingsRow>
+
+        <template v-if="system.simulating">
+          <SettingsRow label="当前声明" :value="system.tierBadgeText" tone="warning" simulated />
+          <SettingsRow label="判定依据" :value="system.tierReason" />
+          <SettingsRow
+            label="本机真实档位"
+            :value="system.realTierLabel"
+            hint="模拟值不得冒充真实档位——该值恒由真实硬件事实推导"
+          />
+        </template>
       </SectionCard>
     </template>
   </div>
@@ -319,6 +403,30 @@ onMounted(() => {
 .hw-mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* 档位模拟的显存声明输入框（T-901）：与设置页输入框同口径的 token */
+.hw-input {
+  width: 100%;
+  max-width: 200px;
+  border: 1px solid var(--Theme-border-subtle);
+  border-radius: var(--Scale-radius-button);
+  background: var(--Theme-bg-elevated);
+  color: var(--Theme-text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-13);
+  line-height: 18px;
+  padding: 4px 9px;
+  outline: none;
+}
+
+.hw-input:focus {
+  border-color: var(--Theme-primary);
+}
+
+.hw-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .hw-verdict {

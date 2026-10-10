@@ -157,7 +157,7 @@ def count_nodes_by_provider(profile_path: str) -> dict[str, int]:
 # 候选链
 # ---------------------------------------------------------------------------
 
-def build_candidate_chain(facts: DeviceFacts) -> list[str]:
+def build_candidate_chain(facts: DeviceFacts, *, force_tensorrt: bool = False) -> list[str]:
     """按硬件形态展开 ORT EP 候选链（设计文档 §5.2）。
 
     - NVIDIA 存在 → `CUDAExecutionProvider`（TensorRT 属 G-04/P3，需 `has_tensorrt`
@@ -165,9 +165,16 @@ def build_candidate_chain(facts: DeviceFacts) -> list[str]:
     - Intel GPU → **走 OpenVINO 原生 API**，不是 ORT EP：ORT + OpenVINO EP 实测为
       **负收益**（比 ORT CPU EP 还慢），故刻意不入链；
     - CPU EP 恒在链尾（保底后端，任何环境都必须可用）。
+
+    `force_tensorrt`（T-901 档位模拟）：把 TensorRT **强制入链**，用于在有 NVIDIA 的机器上
+    真实走一遍 G-04 的候选/失败路径（本机未装 TRT 时它会以"不可用"被验证并记录，
+    这正是要验证的负路径），否则该分支永远不会被执行过。**无 NVIDIA 时不入链**——
+    没有 CUDA 的机器上 TRT 连候选资格都没有，模拟也不该造出这种组合。
     """
     chain: list[str] = []
     if facts.nvidia:
+        if force_tensorrt:
+            chain.append("TensorrtExecutionProvider")
         chain.append("CUDAExecutionProvider")
     chain.append("CPUExecutionProvider")
     return chain
@@ -479,13 +486,18 @@ def verify_candidates(
     probe_size: int = _DEFAULT_PROBE_SIZE,
     measure_latency: bool = True,
     ort_module=None,
+    force_tensorrt: bool = False,
 ) -> VerificationResult:
     """按候选链逐个验证，返回全部 verdict（含**被剔除**的，附原因）。
 
     剔除规则：`latency > CPU 的 latency` → 可用但不划算，剔除（设计文档 §5.2）。
+
+    `force_tensorrt`（T-901 档位模拟）透传给 `build_candidate_chain`，见其 docstring。
+    ⚠️ 指纹恒按**真实** facts 计算（`facts` 是探测结果，不受模拟影响），
+    因此模拟态产出的结论**不得**写入以该指纹为键的缓存（由调用方保证，见 `capabilities`）。
     """
     result = VerificationResult(hardware_fingerprint=hardware_fingerprint(facts))
-    chain = build_candidate_chain(facts)
+    chain = build_candidate_chain(facts, force_tensorrt=force_tensorrt)
 
     for provider in chain:
         verdict = verify_backend(

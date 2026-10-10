@@ -16,8 +16,15 @@
 | `task_retention_days` | 下次启动清理时生效（启动序列第 1 步末执行 `cleanup_expired_tasks`） |
 | `max_concurrency` | **已保存但尚未生效**：执行器并发恒为 1（保底档），开放并发属 G-06（T-907） |
 | `log_level` | 立即（重设进程内 root logger）；重启后由启动序列按落库值重设 |
-| `simulation_enabled` | **已保存但尚未生效**：档位模拟开关属 P3（T-901） |
+| `simulation_enabled` | **立即生效**（T-901）：开/关档位模拟总闸 |
+| `force_tier` | **立即生效**（T-901）：强制档位（`T0`~`T3`，空 = 不强制），作用于档位判定 |
+| `force_vram_mb` | **立即生效**（T-901）：强制"可用显存"，作用于档位推导**与**模型可用性门控 |
+| `force_has_tensorrt` | **立即生效**（T-901）：把 TensorRT 加入 EP 候选链（消费方为 G-04 / T-909） |
 | `calibration_state` | **只读派生**（阶段 C / T-805 已实现）：无有效标定记录时为 `pending` |
+
+⚠️ 档位模拟四个键**必须一起改**：保存后本模块会作废设置缓存 + 能力快照 + 硬件快照
+   （`services/simulation.invalidate()`），否则会出现"设置改了、能力面板不变"的假象。
+   模拟**只覆盖判定输入、不伪造硬件事实**——诊断 JSON 里仍能看到真实硬件（见 `engine/simulation.py`）。
 
 ⚠️ 有意不做的两件事：路径类改动**不迁移既有文件**、**不重开已有文件句柄** ——
 迁移 / 重开会让运行中的任务与已落库记录失去一致性（风险远大于收益）。
@@ -34,6 +41,9 @@ from sqlalchemy import delete, select
 from ..core.config import PROJECT_ROOT, get_settings
 from ..core.errors import AppError
 from ..db import get_session
+from ..engine.simulation import VALID_TIERS as _SIM_TIERS
+from ..engine.simulation import parse_tier as _parse_tier
+from ..engine.simulation import parse_vram_mb as _parse_vram_mb
 from ..models.entities import Artifact, Calibration, Setting, Task
 
 logger = logging.getLogger("websr.services.settings_store")
@@ -56,6 +66,8 @@ class SettingSpec:
     minimum: int | None = None
     maximum: int | None = None
     choices: tuple[str, ...] | None = None
+    #: 允许空串（T-901 档位模拟的"不强制"语义）：默认**不允许**，避免静默清空既有配置
+    allow_empty: bool = False
 
 
 _SPECS: tuple[SettingSpec, ...] = (
@@ -65,8 +77,13 @@ _SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("max_upload_mb", "number", minimum=1, maximum=4096),
     SettingSpec("max_concurrency", "number", minimum=1, maximum=8),
     SettingSpec("log_level", "string", choices=_LOG_LEVELS),
+    # ---- T-901 档位模拟（P3-首）：四键一组，空串 = 不强制。校验走 engine/simulation 的解析器，
+    #      保证"设置层接受的写法"与"引擎层认得的写法"是同一套（不会出现两边口径漂移）。
     SettingSpec("simulation_enabled", "boolean"),
-    SettingSpec("calibration_state", "string", writable=False),  # S2 前恒 pending
+    SettingSpec("force_tier", "string", choices=("",) + tuple(_SIM_TIERS), allow_empty=True),
+    SettingSpec("force_vram_mb", "string", allow_empty=True),
+    SettingSpec("force_has_tensorrt", "string", choices=("", "true", "false"), allow_empty=True),
+    SettingSpec("calibration_state", "string", writable=False),  # 由标定记录派生
 )
 _SPEC_BY_KEY = {s.key: s for s in _SPECS}
 
@@ -176,6 +193,9 @@ def _default(key: str) -> str:
         return cfg.log_level
     if key == "simulation_enabled":
         return "false"
+    # T-901：三个"强制项"的默认值都是**空串 = 不强制**（不是"强制为 T0 / 0 显存"）
+    if key in ("force_tier", "force_vram_mb", "force_has_tensorrt"):
+        return ""
     if key == "calibration_state":
         return "pending"
     raise AppError("INTERNAL_ERROR", f"配置项 {key} 缺少默认值定义", "请导出诊断 JSON 并查看日志", 500)
@@ -256,10 +276,32 @@ def _validate(key: str, value: str) -> str:
         return "true" if low in ("true", "1", "yes", "on") else "false"
     # string
     if not raw:
+        # T-901：档位模拟的三个"强制项"用**空串表达"不强制"**（不是缺省填 T0 / 0 显存），
+        # 所以这几个键必须放行空串；其余字符串键仍拒绝空值。
+        if spec.allow_empty:
+            return ""
         raise AppError(
             "VALIDATION_ERROR", f"「{key}」不能为空", "请填写内容后重试", 400,
             detail={"key": key, "value": value},
         )
+    # T-901：模拟键的取值用**引擎层同一套解析器**校验——设置层接受的写法与引擎层
+    # 认得的写法必须一致，否则会出现"保存成功但实际没生效"的静默失败。
+    if key == "force_tier":
+        if _parse_tier(raw) is None:
+            raise AppError(
+                "VALIDATION_ERROR", f"「{key}」取值非法: {raw}",
+                f"可选值为 {' / '.join(_SIM_TIERS)}，留空表示不强制", 400,
+                detail={"key": key, "value": value},
+            )
+        return str(_parse_tier(raw))
+    if key == "force_vram_mb":
+        if _parse_vram_mb(raw) is None:
+            raise AppError(
+                "VALIDATION_ERROR", f"「{key}」取值非法: {raw}",
+                "请填 MB（如 24576）或带 G 后缀（如 24G），留空表示不强制", 400,
+                detail={"key": key, "value": value},
+            )
+        return str(_parse_vram_mb(raw))
     if spec.choices and raw not in spec.choices:
         raise AppError(
             "VALIDATION_ERROR", f"「{key}」取值非法: {raw}",
@@ -316,6 +358,12 @@ def update_settings(items: list[dict]) -> list[dict]:
     if "data_root" in accepted:
         _prepare_data_root(accepted["data_root"])
 
+    # T-901：记下模拟键的**改动前**取值，保存后比对——只有真的变了才作废下游缓存
+    # （能力快照 / 硬件快照）。否则前端"整表提交"会让每次保存都重建快照。
+    from . import simulation as simulation_service  # 局部 import：避免模块级环
+
+    sim_before = {k: effective(k) for k in simulation_service.SIMULATION_KEYS}
+
     try:
         s = get_session()
         try:
@@ -343,6 +391,12 @@ def update_settings(items: list[dict]) -> list[dict]:
 
     if "log_level" in accepted:
         apply_log_level(accepted["log_level"])
+
+    if any(sim_before[k] != effective(k) for k in simulation_service.SIMULATION_KEYS):
+        # 模拟态变了 → 快照里的 tier / 门控显存已过时，必须作废（否则界面显示不变）
+        simulation_service.invalidate()
+        logger.info("档位模拟设置已变更，能力快照与硬件快照已作废")
+
     return list_settings()
 
 

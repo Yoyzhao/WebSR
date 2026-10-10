@@ -27,6 +27,10 @@ ERR_TS = ROOT / "web" / "src" / "api" / "errorMessages.ts"
 ENTITIES = ROOT / "server" / "app" / "models" / "entities.py"
 PROFILE = ROOT / "server" / "app" / "engine" / "runtime_profile.py"
 DECISION = ROOT / "server" / "app" / "services" / "engine_decision.py"
+#: T-901：档位模拟的 reasons 文案在此模块生成（`SimulationOverride.reason_line`）。
+#: 它也是 `resolved.reasons` 的**产出方之一**，故纳入 §8 允许集的比对范围——
+#: 否则"新增文案须同时更新 §8"这条纪律会漏掉这个模块。
+SIMULATION = ROOT / "server" / "app" / "engine" / "simulation.py"
 
 PASS = FAIL = 0
 
@@ -60,7 +64,7 @@ api_ts = _read(API_TS)
 const_ts = _read(CONST_TS)
 err_ts = _read(ERR_TS)
 entities = _read(ENTITIES)
-impl_text = _read(PROFILE) + "\n" + _read(DECISION)
+impl_text = _read(PROFILE) + "\n" + _read(DECISION) + "\n" + _read(SIMULATION)
 openapi = json.loads(_read(OPENAPI))
 
 # ---------------------------------------------------------------------------

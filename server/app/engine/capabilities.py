@@ -42,6 +42,7 @@ from .ep_verify import (
 )
 from .fallback import DEFAULT_ALIGN
 from .runtime_profile import CalibrationView, RuntimeRequest, decide_profile
+from .simulation import SimulationOverride
 
 logger = logging.getLogger("websr.engine.capabilities")
 
@@ -75,8 +76,8 @@ def _root_key(data_root: Path | str) -> str:
 # 档位判定
 # ---------------------------------------------------------------------------
 
-def derive_tier(facts: DeviceFacts, adopted_providers: list[str]) -> tuple[str, str, str]:
-    """(`tier`, `tier_label`, `tier_reason`)。判定顺序**自上而下，首个命中即定档**。
+def _derive_tier_hardware(facts: DeviceFacts, adopted_providers: list[str]) -> tuple[str, str, str]:
+    """**纯硬件**档位判定（不含模拟）。判定顺序**自上而下，首个命中即定档**。
 
     1. 可用显存 ≥ 48 GB → T3
     2. 可用显存 ≥ 16 GB → T2
@@ -109,6 +110,38 @@ def derive_tier(facts: DeviceFacts, adopted_providers: list[str]) -> tuple[str, 
     else:
         reason = "未检测到可用 GPU 后端（纯 CPU 路径）"
     return "T0", _LABELS["T0"], reason
+
+
+def derive_tier(
+    facts: DeviceFacts,
+    adopted_providers: list[str],
+    simulation: SimulationOverride | None = None,
+) -> tuple[str, str, str]:
+    """(`tier`, `tier_label`, `tier_reason`)。**真实判定 + 档位模拟叠加**（T-901）。
+
+    模拟**只覆盖判定输入**，不伪造硬件事实（`facts` 原对象不被修改）：
+    - `force_tier` 直接定档；
+    - 仅 `force_vram_mb` 时，用"声明的可用显存"重新推导一次；
+    - 生效时 `tier_reason` **必须**出现"档位模拟"字样（PRD §2.3 原则 4：界面据此提示）。
+    """
+    real_tier, real_label, real_reason = _derive_tier_hardware(facts, adopted_providers)
+
+    if simulation is None or not simulation.active:
+        return real_tier, real_label, real_reason
+
+    if simulation.force_tier:
+        tier = simulation.force_tier
+        return tier, f"{tier} · 模拟档位", simulation.tier_reason(tier, real_tier, real_reason)
+
+    # 只声明了显存：按模拟后的可用显存重新推导（已推不出更高档时如实说明）
+    sim_facts = simulation.apply_to_facts(facts) or facts
+    tier, _label, sim_reason = _derive_tier_hardware(sim_facts, adopted_providers)
+    vram_gb = (simulation.force_vram_mb or 0) / 1024
+    reason = (
+        f"档位模拟：可用显存声明为 {vram_gb:.1f} GB → 推导档位 {tier}"
+        f"（本机真实档位 {real_tier}）。模拟档位仅用于测试，不代表真实能力。模拟推导：{sim_reason}"
+    )
+    return tier, f"{tier} · 模拟档位", reason
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +203,7 @@ def build_snapshot(
     probe_size: int = 256,
     measure_latency: bool = True,
     calibration_provider: Callable[[str | None], CalibrationView | None] | None = None,
+    simulation: SimulationOverride | None = None,
 ) -> tuple[dict, dict]:
     """执行完整编排，返回 `(capabilities, details)`。
 
@@ -182,15 +216,26 @@ def build_snapshot(
     所以这里传回调而不是值——引擎层保持不读库（纯度），应用层提供 `指纹 → 标定记录` 的映射。
     无有效标定时 `using_fallback` 为 true（§6.8）。⚠️ 快照按数据根缓存，
     标定落定后需以 `refresh=True` 重建（T-805 接线时在标定完成回调中触发）。
+
+    `simulation`（T-901）**只覆盖判定输入**：档位推导与 `force_has_tensorrt` 入链。
+    模拟生效时**不读写 EP 验证缓存**——否则模拟态产出的 verdict 会被写进真实指纹的缓存里，
+    之后即使关掉模拟也会命中一份"带模拟成分"的结论（缓存污染）。
     """
+    sim = simulation or SimulationOverride()
     facts = probe_device_facts()
 
     excluded = deliberately_excluded(facts)
     result: VerificationResult | None = None
     cache_state = "miss"
 
-    # 缓存命中即跳过 profile（§6.6 硬约束 1）
-    cached = None if refresh else backend_cache.load_as_result(data_root, hardware_fingerprint(facts))
+    # 缓存命中即跳过 profile（§6.6 硬约束 1）。模拟态下一律绕过缓存（见 docstring）。
+    cached = None
+    if not sim.active:
+        cached = None if refresh else backend_cache.load_as_result(
+            data_root, hardware_fingerprint(facts)
+        )
+    else:
+        cache_state = "bypassed_simulation"
     if cached is not None:
         result = cached
         cache_state = "hit"
@@ -202,7 +247,9 @@ def build_snapshot(
         if chosen is None or not chosen.is_file():
             result = VerificationResult(hardware_fingerprint=hardware_fingerprint(facts))
             result.exception_events.append("未找到可用于验证的 .onnx 探针模型，跳过阶段 B")
-            cache_state = "skipped"
+            # 模拟态下"缓存被绕过"是更该被看到的事实（skipped 会让它看起来像普通路径）
+            if not sim.active:
+                cache_state = "skipped"
         else:
             result = verify_candidates(
                 facts,
@@ -210,8 +257,11 @@ def build_snapshot(
                 probe_size=probe_size,
                 measure_latency=measure_latency,
                 ort_module=ort_module,
+                force_tensorrt=sim.tensorrt_or(False),
             )
-            if result.adopted:
+            if sim.active:
+                pass  # 模拟态**不落盘**（见 docstring：避免污染真实指纹的缓存）
+            elif result.adopted:
                 backend_cache.save(data_root, result)
                 cache_state = "written"
             else:
@@ -220,7 +270,7 @@ def build_snapshot(
                 logger.warning("候选链中无后端通过验证，不写缓存：%s", result.exception_events)
                 cache_state = "not_saved"
 
-    tier, tier_label, tier_reason = derive_tier(facts, result.adopted)
+    tier, tier_label, tier_reason = derive_tier(facts, result.adopted, sim)
 
     evidence = [v.to_evidence() for v in result.verdicts]
     evidence += [v.to_evidence() for v in excluded]
@@ -257,8 +307,9 @@ def build_snapshot(
         "using_fallback": baseline.using_fallback,
         "active_backend": active_backend,
         "active_precision": baseline.precision,
-        # 档位模拟属 T-901（P3）；此处只提供契约要求的占位语义
-        "simulation": {"enabled": False, "force_tier": None},
+        # 档位模拟（T-901）：字段集与契约 v1.0 一致（`{enabled, force_tier}`），
+        # 但取值由**设置真实计算**（此前是写死的占位）。`enabled` 表示"确实改变了判定输入"。
+        "simulation": sim.to_block(),
     }
     details = {
         "_facts": facts,  # 内部复用项：get_snapshot 会摘走，不下发给调用方
@@ -276,6 +327,16 @@ def build_snapshot(
             {"provider": v.provider, "reason": v.reason} for v in excluded
         ],
         "ort_available_providers": list(facts.ort_available_providers),
+        # 诊断用：模拟态下"真实硬件事实"与"生效判定输入"的对照（T-901）
+        "simulation": {
+            "enabled": sim.enabled,
+            "active": sim.active,
+            "force_tier": sim.force_tier,
+            "force_vram_mb": sim.force_vram_mb,
+            "force_has_tensorrt": sim.force_has_tensorrt,
+            "real_tier": _derive_tier_hardware(facts, result.adopted)[0],
+            "note": "模拟只覆盖判定输入，不伪造硬件事实；device_facts 恒为真实探测值。",
+        },
     }
     return capabilities, details
 
@@ -290,8 +351,13 @@ def get_snapshot(
     probe_size: int = 256,
     measure_latency: bool = True,
     calibration_provider: Callable[[str | None], CalibrationView | None] | None = None,
+    simulation: SimulationOverride | None = None,
 ) -> tuple[dict, dict]:
-    """进程内缓存的快照（避免每次 `/api/system/capabilities` 都重跑探测与 profile）。"""
+    """进程内缓存的快照（避免每次 `/api/system/capabilities` 都重跑探测与 profile）。
+
+    ⚠️ 模拟态变化后**必须**由调用方 `reset_snapshot()` 作废缓存，否则会继续返回
+    上一套档位（应用层由 `services/simulation.invalidate()` 统一负责）。
+    """
     key = _root_key(data_root)
     with _lock:
         hit = _snapshots.get(key)
@@ -306,6 +372,7 @@ def get_snapshot(
         probe_size=probe_size,
         measure_latency=measure_latency,
         calibration_provider=calibration_provider,
+        simulation=simulation,
     )
     facts = built_details.pop("_facts", None)  # 内部复用项，不下发给调用方
     global _last_key

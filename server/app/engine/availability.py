@@ -13,45 +13,62 @@ import logging
 from dataclasses import dataclass
 
 from . import runtimes
+from .simulation import SimulationOverride
 
 logger = logging.getLogger("websr.engine.availability")
 
 
 @dataclass(frozen=True)
 class HardwareSnapshot:
-    """可用性判定所需的硬件事实集（`available_vram_mb` = **实读**可用显存）。"""
+    """可用性判定所需的硬件事实集（`available_vram_mb` = **实读**可用显存）。
+
+    T-901：模拟态下 `available_vram_mb` 是**模拟后的有效值**，此时 `simulated` 为真——
+    调用方（界面）据此提示"门控按模拟档位执行"。探测结果本身**不被改写**
+    （缓存里存的一直是真实值，模拟在每次取用时叠加，因此开关切换无需清缓存）。
+    """
 
     available_vram_mb: int | None  # None = 探测不到（无独显 / 驱动缺失）
+    simulated: bool = False
 
 
 _snapshot: HardwareSnapshot | None = None
 
 
-def probe_hardware_snapshot(*, refresh: bool = False) -> HardwareSnapshot:
-    """取硬件快照。优先复用引擎能力快照（阶段 A）的 facts；没有则独立探测一次。"""
+def probe_hardware_snapshot(
+    *, refresh: bool = False, simulation: SimulationOverride | None = None
+) -> HardwareSnapshot:
+    """取硬件快照。优先复用引擎能力快照（阶段 A）的 facts；没有则独立探测一次。
+
+    `simulation`（T-901）只覆盖**可用显存**这一项判定输入：真实探测结果仍按原样缓存，
+    模拟值在每次调用时叠加——所以"开/关模拟"不需要清任何缓存，也不会有脏读。
+    """
     global _snapshot
-    if _snapshot is not None and not refresh:
-        return _snapshot
-
-    facts = None
-    try:
-        from . import capabilities as caps_engine  # 局部 import：避免循环依赖
-
-        facts = caps_engine.get_facts()
-    except Exception as exc:  # 能力层异常不得影响模型列表可用性
-        logger.warning("复用能力快照失败，将独立探测：%s", exc)
-
-    if facts is None:
+    if _snapshot is None or refresh:
+        facts = None
         try:
-            from .device_probe import probe_device_facts
+            from . import capabilities as caps_engine  # 局部 import：避免循环依赖
 
-            facts = probe_device_facts()
-        except Exception as exc:
-            logger.warning("硬件探测失败，按无法判定处理：%s", exc)
-            facts = None
+            facts = caps_engine.get_facts()
+        except Exception as exc:  # 能力层异常不得影响模型列表可用性
+            logger.warning("复用能力快照失败，将独立探测：%s", exc)
 
-    _snapshot = HardwareSnapshot(available_vram_mb=facts.available_vram_mb if facts else None)
-    return _snapshot
+        if facts is None:
+            try:
+                from .device_probe import probe_device_facts
+
+                facts = probe_device_facts()
+            except Exception as exc:
+                logger.warning("硬件探测失败，按无法判定处理：%s", exc)
+                facts = None
+
+        _snapshot = HardwareSnapshot(available_vram_mb=facts.available_vram_mb if facts else None)
+
+    if simulation is None or not simulation.active:
+        return _snapshot
+    return HardwareSnapshot(
+        available_vram_mb=simulation.vram_or(_snapshot.available_vram_mb),
+        simulated=True,
+    )
 
 
 def reset_snapshot() -> None:

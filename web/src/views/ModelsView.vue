@@ -41,7 +41,9 @@ const availableCount = computed(() => models.value.filter((m) => m.available).le
 const disabledCount = computed(() => models.value.filter((m) => !m.available).length)
 
 const vms = computed(() =>
-  filtered.value.map((m) => toModelVM(m, system.availableVramGb || null, system.tierLabel)),
+  // 模型可用性**只**由服务端裁定（契约 §3.2 `available`），前端不再用本地显存二次判断——
+  // 否则档位模拟声明更高显存时，模型仍会被错误置灰（T-901）。
+  filtered.value.map((m) => toModelVM(m)),
 )
 
 async function load() {
@@ -138,7 +140,7 @@ onMounted(load)
     </div>
 
     <p class="mp-note">
-      模型不做自动推荐：引擎不会替你挑选，也不会按显存排序。置灰只表示**当前档位跑不动**，
+      模型不做自动推荐：引擎不会替你挑选，也不会按显存排序。置灰只表示「当前档位跑不动」，
       不是模型本身有问题 —— 换到更高档位的机器上即可正常使用。
     </p>
 
@@ -167,8 +169,6 @@ onMounted(load)
         v-for="vm in vms"
         :key="vm.id"
         :model="models.find((m) => m.id === vm.id)!"
-        :available-vram-gb="system.availableVramGb || null"
-        :tier-label="system.tierLabel"
         @use="useModel"
         @delete="onDelete"
       />

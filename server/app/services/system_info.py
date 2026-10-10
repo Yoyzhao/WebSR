@@ -29,6 +29,7 @@ from ..engine.runtime_profile import CalibrationView
 from ..models.builtin_catalog import BUILTIN_MODELS
 from ..models.entities import Calibration, Model, Task
 from . import settings_store
+from . import simulation as simulation_service
 
 logger = logging.getLogger("websr.services.system_info")
 
@@ -101,13 +102,18 @@ def read_calibration_view(
 
 
 def _snapshot() -> tuple[dict, dict]:
-    """取能力快照（进程内缓存；首次调用会跑一次阶段 A/B，之后为读缓存）。"""
+    """取能力快照（进程内缓存；首次调用会跑一次阶段 A/B，之后为读缓存）。
+
+    T-901：**每次取用时都读一次模拟设置**。模拟态变化时 `services/simulation.invalidate()`
+    会作废快照，所以这里的取值与缓存是一致的（不会出现"设置改了但快照还是旧的"）。
+    """
     return caps_engine.get_snapshot(
         settings_store.effective_data_root(),
         probe_model=probe_model_path(),
         models_dir=settings_store.effective_model_dir(),
         # 引擎层不读库：把"指纹 → 标定结论"的取数交给应用层
         calibration_provider=read_calibration_view,
+        simulation=simulation_service.current(),
     )
 
 
@@ -228,4 +234,9 @@ def build_diagnostics() -> dict:
         "using_fallback": caps["using_fallback"],
         "active_backend": caps["active_backend"],
         "active_precision": caps["active_precision"],
+        # T-901：模拟态下"真实硬件 vs 生效判定输入"的对照（device_facts 恒为真实值）
+        "simulation": {
+            "contract": caps.get("simulation"),
+            "details": details.get("simulation"),
+        },
     }

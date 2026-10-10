@@ -54,9 +54,12 @@ def png_bytes(width: int, height: int, noise: bool = False) -> bytes:
     return buf.getvalue()
 
 
+# T-901 档位模拟新增三键（`force_tier` / `force_vram_mb` / `force_has_tensorrt`）——
+# 刻意走**通用设置表**而非契约字段，故契约字段集不变，但键集合必须如实增长。
 EXPECTED_KEYS = {
     "data_root", "model_dir", "task_retention_days", "max_upload_mb",
     "max_concurrency", "log_level", "simulation_enabled", "calibration_state",
+    "force_tier", "force_vram_mb", "force_has_tensorrt",
 }
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -74,7 +77,7 @@ with TestClient(app) as client:
     items = r.json()
     check("响应为裸数组（与前端已定稿类型一致）", isinstance(items, list))
     by_key = {i["key"]: i for i in items}
-    check("键集合完整（8 项）", set(by_key) == EXPECTED_KEYS, f"actual={sorted(by_key)}")
+    check(f"键集合完整（{len(EXPECTED_KEYS)} 项）", set(by_key) == EXPECTED_KEYS, f"actual={sorted(by_key)}")
     check("顺序固定（声明顺序，非隐式）", [i["key"] for i in items][0] == "data_root")
     check("type 字段齐全", all(i["type"] in ("string", "number", "boolean") for i in items))
     check("max_concurrency 默认 1（保底档）", by_key["max_concurrency"]["value"] == "1")

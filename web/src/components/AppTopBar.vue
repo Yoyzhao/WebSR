@@ -51,7 +51,7 @@ const themeTip = computed(() =>
 const tierBadge = computed(() => system.tierBadgeText)
 const tierTip = computed(() =>
   system.simulating
-    ? `档位模拟已开启：强制执行 ${system.capabilities?.simulation.force_tier ?? '—'} 的代码路径。执行结果不代表真实性能。`
+    ? `档位模拟已开启（服务端生效）：档位判定、模型门控与任务决策都按声明的档位执行。执行结果不代表真实性能。`
     : `当前硬件档位：${system.tierLabel}`,
 )
 

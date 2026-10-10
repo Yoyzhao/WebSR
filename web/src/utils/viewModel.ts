@@ -213,14 +213,16 @@ export interface ModelVM {
   removable: boolean
 }
 
-export function toModelVM(model: Model, availableVramGb: number | null, tierLabel?: string): ModelVM {
+export function toModelVM(model: Model): ModelVM {
   const requiredGb = model.min_vram_mb ? model.min_vram_mb / 1024 : 0
   let disabledReason = ''
-  // 服务端已按当前档位算好可用性，优先采用；本地再兜一层显存门槛校验
+  // **可用性只由服务端裁定**（契约 §3.2：`available` 已按「登记态 → 运行时 → 显存门槛」三级算好）。
+  //
+  // ⚠️ T-901 起刻意**删掉**了这里原先的"本地再兜一层显存门槛"：它用**真实**可用显存
+  //    二次否定服务端结论，于是档位模拟（声明更高显存）时模型仍会被错误置灰——
+  //    同一个判断写两遍，迟早会漂移。前端只渲染服务端结论与原因。
   if (model.available === false) {
     disabledReason = model.unavailable_reason || '当前硬件档位不支持该模型'
-  } else if (model.min_vram_mb && availableVramGb !== null && availableVramGb < requiredGb) {
-    disabledReason = `需要约 ${requiredGb.toFixed(1)} GB 可用显存，当前${tierLabel ? `（${tierLabel}）` : ''}仅 ${availableVramGb.toFixed(1)} GB`
   }
 
   const ncnnConditional = model.supported_backends?.includes('ncnn') ?? false

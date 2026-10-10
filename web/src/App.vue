@@ -62,7 +62,9 @@ const showSimulationBanner = computed(() => system.simulating && route.name !== 
 
 const simulationBannerText = computed(() => {
   const forced = system.capabilities?.simulation.force_tier ?? '—'
-  return `档位模拟已开启 · 强制声明 ${forced}（本机真实档位 ${system.realTierLabel}）· 执行结果不代表真实性能`
+  // T-901：模拟是**服务端**行为（档位判定 / 模型门控 / 决策输入），
+  // 文案必须说清「按模拟值执行」而不是只改显示，否则用户会误判结果可信度。
+  return `档位模拟已开启（服务端生效）· 目标 ${forced}（本机真实档位 ${system.realTierLabel}）· 档位判定与模型门控按模拟值执行，结果不代表真实性能`
 })
 
 function go(path: string) {

@@ -37,7 +37,7 @@ from ..engine.model_loader import (
 from ..engine.runtime_profile import RuntimeProfile, reprofile
 from ..models.entities import Artifact, Model, Task
 from ..schemas.task import ArtifactOut, ProgressOut, TaskOut
-from ..services import engine_decision, media_store
+from ..services import engine_decision, media_store, simulation as simulation_service
 from ..services.model_registry import get_model_or_404
 from .broadcaster import broadcaster
 from .executor import TaskContext, TaskCancelled, get_executor
@@ -206,7 +206,8 @@ class TaskManager:
             available, reason = gate_availability(
                 status=model.status,
                 min_vram_mb=model.min_vram_mb,
-                snapshot=probe_hardware_snapshot(),
+                # T-901：模拟态下门控按"声明的可用显存"执行（与列表页口径一致）
+                snapshot=probe_hardware_snapshot(simulation=simulation_service.current()),
             )
             if not available:
                 if model.status == "needs_convert":
