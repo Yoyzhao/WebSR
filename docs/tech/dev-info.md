@@ -85,8 +85,8 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 │   ├── migrations/             #   Alembic（env.py + versions/0001_initial.py）
 │   └── pyproject.toml          #   依赖 + [tool.alembic]（不用 ini，ADR-006 约束 4）
 ├── scripts/                    # 开发期脚本（非产品代码）
-│   ├── export_openapi.py       #   导出 docs/tech/api/openapi.json（供 T-700）
-│   └── test-script/            #   逐任务验证脚本（verify_t602~t609 / t802 / t803_*.py）
+│   ├── export_openapi.py       #   导出 docs/tech/api/openapi.json（19 条路径）
+│   └── test-script/            #   逐任务验证脚本（verify_t602~t609 / t802~t807 + verify_t700_contract.py 契约一致性校验）
 ├── data/                       # 【应用数据】运行期读写
 │   ├── models/                 #   模型文件（onnx + OpenVINO IR 子目录 ir/ + ncnn）
 │   ├── uploads/                #   用户上传原图（运行时创建；旁车 .json 存元信息）
@@ -100,7 +100,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 │   ├── tech/
 │   │   ├── dev-info.md         #   本文件
 │   │   ├── tech-arch.md        #   技术架构
-│   │   ├── api-contract.md     #   API 契约（草案；最终冻结在 T-700 / M6）
+│   │   ├── api-contract.md     #   API 契约（**v1.0 · 已冻结**，T-700 / 2026-10-10 定稿）
 │   │   ├── research/           #   前置调研与实测证据（6 份，见其 README.md）
 │   │   └── arch/               #   ADR 架构决策记录
 │   ├── prototype/              #   ★ 前端原型（5A 产出）：9 张页面图 + 6 份文档 + tokens.css + assets/

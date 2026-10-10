@@ -96,6 +96,10 @@ export async function createTask(
       tile: 256,
       precision: 'fp32',
       backend: 'CUDAExecutionProvider',
+      overlap: 64,
+      feather_px: 64,
+      concurrency: 1,
+      source: 'fallback',
       using_fallback: true,
       degraded: false,
       reasons: ['尚未完成首启自标定，取保守下界参数', '标定完成后将自动切换到实测参数'],
@@ -236,6 +240,11 @@ export async function importModel(payload: {
       payload.min_vram_mb <= MOCK_CAPABILITIES.device_facts.available_vram_gb * 1024
         ? null
         : `需 ≥ ${(payload.min_vram_mb / 1024).toFixed(0)} GB 显存 · 当前可用 ${MOCK_CAPABILITIES.device_facts.available_vram_gb} GB`,
+    status: payload.format === 'pth' || payload.format === 'safetensors' ? 'needs_convert' : 'ready',
+    conversion:
+      payload.format === 'pth' || payload.format === 'safetensors'
+        ? { available: true, reason: null }
+        : null,
   }
   MOCK_MODELS.push(model)
   return model
@@ -263,6 +272,8 @@ export async function triggerCalibration(): Promise<void> {
 }
 
 export async function fetchLogs(taskId: string): Promise<LogEntry[]> {
+  // 真实端点：GET /api/tasks/{id}/logs → LogEntry[]（api-contract v1.0 §4.1，T-700）
+  if (!USE_MOCK) return request<LogEntry[]>(`/tasks/${taskId}/logs`)
   await delay(260)
   return (
     (await import('./mock/data')).MOCK_LOGS[taskId] ?? [

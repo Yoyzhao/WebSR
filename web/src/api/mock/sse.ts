@@ -70,7 +70,7 @@ export function subscribeTaskProgress(
       const outH = task.source_height * task.params.scale
       handlers.onDone?.({
         ...task,
-        status: 'done',
+        status: 'completed',
         progress: { percent: 1, current_item: 1, total_items: 1, current_chunk: totalChunks, total_chunks: totalChunks },
         output_width: outW,
         output_height: outH,

@@ -385,7 +385,7 @@ onMounted(async () => {
                 </div>
                 <StatusText
                   :status="previewTask.status"
-                  :degraded="!!previewTask.resolved?.degraded && previewTask.status === 'done'"
+                  :degraded="!!previewTask.resolved?.degraded && previewTask.status === 'completed'"
                 />
               </div>
 
@@ -417,7 +417,7 @@ onMounted(async () => {
                 <ActionButtons
                   :actions="[
                     { key: 'detail', label: '查看详情', type: 'primary' },
-                    { key: 'compare', label: '进入对比', disabled: previewTask.status !== 'done', disabledReason: '任务完成后才能对比' },
+                    { key: 'compare', label: '进入对比', disabled: previewTask.status !== 'completed', disabledReason: '任务完成后才能对比' },
                   ]"
                   @action="(k: string) => (k === 'detail' ? openDetail(previewTask!.id) : router.push({ path: '/tasks', query: { compare: previewTask!.id } }))"
                 />

@@ -1,29 +1,33 @@
 /**
- * API 类型定义 —— `docs/tech/api-contract.md` 的 TypeScript 表达。
+ * API 类型定义 —— `docs/tech/api-contract.md` **v1.0（已冻结）** 的 TypeScript 表达。
  *
- * ⚠️ 本文件是契约的**代码侧固化**（STEP-5C 决策 D-1）：
- *    字段名、类型、可空性**必须与契约草案逐字对齐**，Mock 与真实实现共用同一套类型。
- *    步骤 6 联调时若契约冻结版本有差异，只改本文件即完成对齐。
+ * ⚠️ 本文件是契约的**代码侧固化**（STEP-5C 决策 D-1 / T-700 冻结）：
+ *    字段名、类型、可空性**必须与契约 v1.0 逐字对齐**，Mock 与真实实现共用同一套类型。
+ *    三处事实源（本文件 / `api-contract.md` / `api/openapi.json`）由
+ *    `scripts/test-script/verify_t700_contract.py` **静态断言**钉住，漂移即测试失败。
  *
  * 命名风格：统一 snake_case（与 Python 侧一致，避免双层转换）。
  * 时间格式：ISO 8601 带时区偏移，服务端存 UTC，前端按 Asia/Shanghai 展示。
  */
 
 /**
- * 任务状态（tech-arch §4.1）。
+ * 任务状态（api-contract §3.1，**服务端枚举为准**）。
  *
- * `pending`  = 已落库但尚未进入执行队列
- * `queued`   = 已入队，等待调度（与 pending 区别在于"是否已被队列接纳"）
- * `canceling`= 协作式取消的中间态，不是终态
- * `failed`   = 推理失败（含降档耗尽后的失败）
+ * `queued`      = 已落库并入队，等待调度
+ * `running`     = 执行中
+ * `canceling`   = 协作式取消的中间态，不是终态
+ * `completed`   = 成功完成
+ * `canceled`    = 已取消
+ * `failed`      = 推理失败（含降档耗尽后的失败）
  * `interrupted` = 进程退出导致的中断，**不是失败**（成因在外部）
+ *
+ * ⚠️ v1 无 `pending`（落库即 `queued`）；⚠️ 终态用 `completed` **不是** `done`。
  */
 export type TaskStatus =
-  | 'pending'
   | 'queued'
   | 'running'
   | 'canceling'
-  | 'done'
+  | 'completed'
   | 'canceled'
   | 'failed'
   | 'interrupted'
@@ -31,8 +35,8 @@ export type TaskStatus =
 /** 推理阶段（api-contract §5） */
 export type TaskStage = 'queued' | 'preprocessing' | 'inferencing' | 'stitching' | 'saving'
 
-/** 产物类型（tech-arch §4.1 ARTIFACT.kind） */
-export type ArtifactKind = 'output' | 'intermediate'
+/** 产物类型（api-contract §3.3：**服务端超集**） */
+export type ArtifactKind = 'input' | 'output' | 'thumb' | 'log' | 'model'
 
 /** 模型格式（PRD §7.5 四格式路由） */
 export type ModelFormat = 'onnx' | 'openvino_ir' | 'ncnn' | 'pth' | 'safetensors'
@@ -53,7 +57,10 @@ export interface ApiError {
   detail?: Record<string, unknown>
 }
 
-/** 分页响应外壳（api-contract §1） */
+/** 分页响应外壳（api-contract §1 / §4.0）。
+ *
+ * ⚠️ **v1 未使用**：v1 列表端点一律返回**裸数组**（见 §4.0 分页裁决）。
+ *    本类型是**预留**——若将来列表规模增长，改用 `Paged<T>` 并新增 `?page&page_size`。 */
 export interface Paged<T> {
   items: T[]
   total: number
@@ -83,24 +90,56 @@ export interface TaskParams {
   backend: BackendId | null
   /** 自动档开关 */
   auto: boolean
+  /** 源文件 id 快照（序列化时提升为 Task.file_id） */
+  file_id?: string
 }
 
 /**
  * 引擎实际生效值 —— "自动档"的唯一可验证输出。
  * ⚠️ 只记这里，不记 params（M2 评审定案）。
+ *
+ * **分层（T-804 / T-806 定稿）**：
+ * - 顶层 = **决策事实**（引擎决定用什么）；
+ * - `execution` = **执行事实**（实际发生了什么），刻意不拍平到顶层——
+ *   "决策与事实混在一层会让人误以为决策即事实"。
  */
 export interface TaskResolved {
+  // ---- 决策事实 ----
   tile: number
   precision: 'fp32' | 'fp16'
   backend: string
+  /** 分块重叠像素（= feather_px） */
+  overlap: number
+  /** 羽化宽度（= overlap） */
+  feather_px: number
+  /** 决策出的并发上限（调度生效属 G-06） */
+  concurrency: number
   /** 是否处于保底档（未标定时的保守下界参数） */
   using_fallback: boolean
   /** 是否发生降档 */
   degraded: boolean
-  /** 决策理由文案 —— 会直接展示给用户，措辞需完整 */
+  /** 决策来源：标定 / 用户 / 保底档 */
+  source: 'calibration' | 'user' | 'fallback'
+  /** 决策理由文案 —— 会直接展示给用户，措辞规范见契约 §8 */
   reasons: string[]
   /** 降档次数与每次原因（"降级必须显式"的证据位） */
   downgrades?: Array<{ field: string; from: string | number; to: string | number; reason: string }>
+  // ---- 执行事实（仅 completed 态有值）----
+  execution?: TaskExecution | null
+}
+
+/** 执行事实（T-806）：任务真正跑出来什么。 */
+export interface TaskExecution {
+  output_width: number
+  output_height: number
+  source_width?: number
+  source_height?: number
+  tiles: number
+  scale: number
+  elapsed_ms: number
+  sha256?: string
+  size_bytes?: number
+  backend?: string
 }
 
 export interface Task {
@@ -193,6 +232,23 @@ export interface Model {
   /** 服务端按当前档位算好的可用性 */
   available: boolean
   unavailable_reason: string | null
+  /**
+   * 登记态（api-contract §3.2）：`ready` | `needs_convert` | `invalid`。
+   * 与 `available` **正交**：前者说"制品能不能加载"，后者说"这台机器能不能跑"。
+   * 未知值显示原值 + 中性色，不抛错。
+   */
+  status: string
+  /**
+   * 离线转换可用性（T-807）：**仅** `.pth` / `.safetensors` 有值，其余为 null。
+   * `available=false` 时 `reason` 给出可照做的说明。
+   */
+  conversion: ModelConversion | null
+}
+
+/** `.pth` / `.safetensors` → `.onnx` 的离线转换可用性（api-contract §3.2，T-807）。 */
+export interface ModelConversion {
+  available: boolean
+  reason: string | null
 }
 
 /** EP 真实性证据（PRD §2.5 F-06：必须有 profile 节点归属作为证据） */

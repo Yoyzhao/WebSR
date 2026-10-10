@@ -593,6 +593,53 @@
         }
       }
     },
+    "/api/tasks/{task_id}/logs": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "List Logs",
+        "description": "任务日志（api-contract §4.1，T-700 冻结点 #8）。\n\n返回由任务事实**派生**的结构化条目；级别过滤由前端做（`04` §2.3）。",
+        "operationId": "list_logs_api_tasks__task_id__logs_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LogEntryOut"
+                  },
+                  "title": "Response List Logs Api Tasks  Task Id  Logs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tasks/{task_id}/events": {
       "get": {
         "tags": [
@@ -1009,6 +1056,41 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "LogEntryOut": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "title": "Level"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "timestamp",
+          "message"
+        ],
+        "title": "LogEntryOut",
+        "description": "任务日志条目（api-contract §3.3 / §4.1，T-700 冻结点 #8）。\n\n由任务事实**派生**（时间线 + 降档 + 错误），不是原始进程日志抓取。\n`code` 仅错误类条目有值（对应 §2.3 错误码）。"
       },
       "ModelCapabilities": {
         "properties": {

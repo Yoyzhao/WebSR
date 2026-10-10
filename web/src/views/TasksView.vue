@@ -34,7 +34,7 @@ const route = useRoute()
 const { isCompact } = useBreakpoint()
 const taskStore = useTaskStore()
 
-const filter = ref<'all' | 'running' | 'done' | 'failed'>('all')
+const filter = ref<'all' | 'running' | 'completed' | 'failed'>('all')
 const detailOpen = ref(false)
 const detailTaskId = ref<string | null>(null)
 
@@ -88,7 +88,7 @@ const filtered = computed(() => {
   const list = taskStore.tasks
   if (filter.value === 'all') return list
   if (filter.value === 'running') return list.filter((t) => t.status === 'running' || t.status === 'queued' || t.status === 'canceling')
-  if (filter.value === 'done') return list.filter((t) => t.status === 'done')
+  if (filter.value === 'completed') return list.filter((t) => t.status === 'completed')
   return list.filter((t) => t.status === 'failed' || t.status === 'interrupted' || t.status === 'canceled')
 })
 
@@ -141,7 +141,7 @@ async function onAction({ key, id }: { key: string; id: string }) {
 }
 
 async function clearFinished() {
-  const count = taskStore.tasks.filter((t) => t.status === 'done' || t.status === 'canceled' || t.status === 'interrupted').length
+  const count = taskStore.tasks.filter((t) => t.status === 'completed' || t.status === 'canceled' || t.status === 'interrupted').length
   if (!count) return ElMessage.info('没有可清理的已完成任务')
   await ElMessageBox.confirm(`将删除 ${count} 条已完成 / 已取消 / 已中断的任务记录（不影响产出文件）。确认清理？`, '清理已完成', {
     confirmButtonText: '确认清理',
@@ -215,7 +215,7 @@ watch(
           :options="[
             { label: '全部', value: 'all' },
             { label: '进行中', value: 'running' },
-            { label: '已完成', value: 'done' },
+            { label: '已完成', value: 'completed' },
             { label: '异常', value: 'failed' },
           ]"
           size="sm"

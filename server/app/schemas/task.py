@@ -67,3 +67,16 @@ class TaskOut(BaseModel):
     finished_at: str | None
     artifacts: list[ArtifactOut] = []
     ep_evidence: list[dict] = []
+
+
+class LogEntryOut(BaseModel):
+    """任务日志条目（api-contract §3.3 / §4.1，T-700 冻结点 #8）。
+
+    由任务事实**派生**（时间线 + 降档 + 错误），不是原始进程日志抓取。
+    `code` 仅错误类条目有值（对应 §2.3 错误码）。
+    """
+
+    level: str  # debug | info | warning | error
+    timestamp: str
+    message: str
+    code: str | None = None

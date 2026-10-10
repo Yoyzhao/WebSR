@@ -34,13 +34,13 @@ export const PAGE_MAX_WIDTH = {
   settings: PAGE_MAX_WIDTH_VALUE,
 } as const
 
-/** 任务状态枚举（tech-arch §4.1 / api-contract §3.1） */
+/** 任务状态枚举（api-contract **v1.0 §3.1**，**服务端枚举为准**）
+ *  ⚠️ v1 无 `pending`（落库即 `queued`）；⚠️ 终态是 `completed` **不是** `done`。 */
 export const TASK_STATUS = [
-  'pending',
   'queued',
   'running',
   'canceling',
-  'done',
+  'completed',
   'canceled',
   'failed',
   'interrupted',
@@ -54,11 +54,10 @@ export type TaskStatus = (typeof TASK_STATUS)[number]
 export type Tone = 'neutral' | 'primary' | 'success' | 'warning' | 'error'
 
 export const STATUS_TONE: Record<TaskStatus, Tone> = {
-  pending: 'primary',
   queued: 'primary',
   running: 'primary',
   canceling: 'primary',
-  done: 'success',
+  completed: 'success',
   canceled: 'neutral',
   failed: 'error',
   // 已中断不是 error：成因是外部因素（进程退出），不是推理失败（04 §2.6）
@@ -69,14 +68,12 @@ export const STATUS_TONE: Record<TaskStatus, Tone> = {
  *  ⚠️ 未知枚举的兜底由 StatusText 组件处理（显示原值 + text-tertiary），
  *     因此这里是 `Record<string, string>` 而非严格枚举映射。 */
 export const STATUS_LABEL: Record<string, string> = {
-  pending: '进行中',
   queued: '排队中',
   running: '进行中',
   canceling: '正在取消',
-  done: '已完成',
+  completed: '已完成',
   canceled: '已取消',
   failed: '失败',
-  error: '失败',
   interrupted: '已中断',
 }
 

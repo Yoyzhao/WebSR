@@ -119,7 +119,7 @@ export const useTaskStore = defineStore('tasks', () => {
   }
 
   async function clearFinished(): Promise<number> {
-    const finished = tasks.value.filter((t) => t.status === 'done' || t.status === 'canceled' || t.status === 'interrupted')
+    const finished = tasks.value.filter((t) => t.status === 'completed' || t.status === 'canceled' || t.status === 'interrupted')
     await removeByIds(finished.map((t) => t.id))
     return finished.length
   }

@@ -98,6 +98,10 @@ const RESOLVED_NORMAL: TaskResolved = {
   tile: 512,
   precision: 'fp16',
   backend: 'CUDAExecutionProvider',
+  overlap: 128,
+  feather_px: 128,
+  concurrency: 1,
+  source: 'calibration',
   using_fallback: false,
   degraded: false,
   reasons: [
@@ -112,6 +116,10 @@ const RESOLVED_DEGRADED: TaskResolved = {
   tile: 256,
   precision: 'fp16',
   backend: 'CUDAExecutionProvider',
+  overlap: 64,
+  feather_px: 64,
+  concurrency: 1,
+  source: 'calibration',
   using_fallback: false,
   degraded: true,
   reasons: ['原定 tile 512 触发显存水位告警，已自动降档至 256'],
@@ -123,6 +131,10 @@ const RESOLVED_FALLBACK: TaskResolved = {
   tile: 256,
   precision: 'fp32',
   backend: 'CUDAExecutionProvider',
+  overlap: 64,
+  feather_px: 64,
+  concurrency: 1,
+  source: 'fallback',
   using_fallback: true,
   degraded: false,
   reasons: ['尚未完成首启自标定，取保守下界参数', '标定完成后将自动切换到实测参数'],
@@ -185,7 +197,7 @@ export const MOCK_TASKS: Task[] = [
   {
     id: 'tsk_01J8X002',
     type: 'upscale',
-    status: 'done',
+    status: 'completed',
     progress: { percent: 1, current_item: 1, total_items: 1, current_chunk: 12, total_chunks: 12 },
     params: { scale: 4, model_id: 'mdl_realesrgan_x4', tile: 512, precision: 'fp16', backend: 'cuda', auto: false },
     resolved: RESOLVED_NORMAL,
@@ -218,7 +230,7 @@ export const MOCK_TASKS: Task[] = [
       {
         id: 'art_002',
         task_id: 'tsk_01J8X002',
-        kind: 'intermediate',
+        kind: 'thumb',
         path: 'data/outputs/tsk_01J8X002/tiles/',
         filename: 'tiles_preview.png',
         width: 1024,
@@ -233,7 +245,7 @@ export const MOCK_TASKS: Task[] = [
   {
     id: 'tsk_01J8X003',
     type: 'upscale',
-    status: 'done',
+    status: 'completed',
     progress: { percent: 1, current_item: 1, total_items: 1, current_chunk: 12, total_chunks: 12 },
     params: { scale: 4, model_id: 'mdl_realesrgan_x4', tile: null, precision: null, backend: null, auto: true },
     resolved: RESOLVED_DEGRADED,
@@ -276,6 +288,10 @@ export const MOCK_TASKS: Task[] = [
       tile: 256,
       precision: 'fp32',
       backend: 'CPUExecutionProvider',
+      overlap: 64,
+      feather_px: 64,
+      concurrency: 1,
+      source: 'user',
       using_fallback: false,
       degraded: true,
       reasons: ['物理内存不足，自动降档 2 次后仍未完成'],
@@ -406,6 +422,8 @@ export const MOCK_MODELS: Model[] = [
     companion: null,
     available: true,
     unavailable_reason: null,
+    status: 'ready',
+    conversion: null,
   },
   {
     id: 'mdl_realesrgan_x4_fp16',
@@ -426,6 +444,8 @@ export const MOCK_MODELS: Model[] = [
     companion: null,
     available: true,
     unavailable_reason: null,
+    status: 'ready',
+    conversion: null,
   },
   {
     id: 'mdl_realesrgan_ir',
@@ -446,6 +466,8 @@ export const MOCK_MODELS: Model[] = [
     companion: ['.xml', '.bin'],
     available: true,
     unavailable_reason: null,
+    status: 'ready',
+    conversion: null,
   },
   {
     id: 'mdl_realesrgan_anime_6b',
@@ -467,6 +489,8 @@ export const MOCK_MODELS: Model[] = [
     companion: null,
     available: true,
     unavailable_reason: null,
+    status: 'ready',
+    conversion: null,
   },
   {
     id: 'mdl_realesrgan_general_x4v3',
@@ -488,6 +512,8 @@ export const MOCK_MODELS: Model[] = [
     companion: null,
     available: true,
     unavailable_reason: null,
+    status: 'ready',
+    conversion: null,
   },
   {
     id: 'mdl_span_x4',
@@ -508,6 +534,8 @@ export const MOCK_MODELS: Model[] = [
     companion: null,
     available: true,
     unavailable_reason: null,
+    status: 'ready',
+    conversion: null,
   },
   {
     id: 'mdl_swinir_l',
@@ -529,6 +557,8 @@ export const MOCK_MODELS: Model[] = [
     companion: null,
     available: false,
     unavailable_reason: '需 ≥ 24 GB 显存 · 当前可用 7.4 GB',
+    status: 'ready',
+    conversion: null,
   },
   {
     id: 'mdl_custom_ncnn',
@@ -549,6 +579,8 @@ export const MOCK_MODELS: Model[] = [
     companion: ['.param', '.bin'],
     available: true,
     unavailable_reason: null,
+    status: 'ready',
+    conversion: null,
   },
 ]
 

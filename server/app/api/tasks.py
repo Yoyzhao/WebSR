@@ -10,7 +10,8 @@ from sqlalchemy import select
 from ..core.errors import AppError
 from ..db import get_session
 from ..models.entities import Artifact, Task
-from ..schemas.task import ArtifactOut, CreateTaskIn, TaskOut
+from ..schemas.task import ArtifactOut, CreateTaskIn, LogEntryOut, TaskOut
+from ..services import task_logs
 from ..tasks.manager import manager, parse_task_id, serialize_artifact, serialize_task
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -83,5 +84,19 @@ def list_artifacts(task_id: str) -> list[ArtifactOut]:
         rows = s.scalars(select(Artifact).where(Artifact.task_id == t.id)).all()
         execution = (t.resolved or {}).get("execution") or {}
         return [serialize_artifact(a, execution) for a in rows]
+    finally:
+        s.close()
+
+
+@router.get("/{task_id}/logs")
+def list_logs(task_id: str) -> list[LogEntryOut]:
+    """任务日志（api-contract §4.1，T-700 冻结点 #8）。
+
+    返回由任务事实**派生**的结构化条目；级别过滤由前端做（`04` §2.3）。
+    """
+    s = get_session()
+    try:
+        t = _get_task_or_404(s, task_id)
+        return task_logs.derive_logs(t, task_logs.model_name_for(s, t))
     finally:
         s.close()

@@ -69,10 +69,14 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def handle_http_exception(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
         # 框架级异常（未匹配路由 404 / 方法不允许 405 等）。
-        # 404 映射 tech-arch §5.2 的 NOT_FOUND；405 等其余框架状态在契约 §2.3 无对应码，
-        # 暂归 INTERNAL_ERROR 语义位（前端走未知码兜底），归位动作列入 T-700 冻结核对。
+        # 404 → NOT_FOUND；405 → METHOD_NOT_ALLOWED；413 → FILE_TOO_LARGE；
+        # 其余框架状态归 INTERNAL_ERROR 语义位（契约 §2.3 全 20 条，T-700 已定稿）。
         if exc.status_code == 404:
             code, message, suggestion = "NOT_FOUND", "资源不存在", "请确认访问地址或刷新列表后重试"
+        elif exc.status_code == 405:
+            code, message, suggestion = (
+                "METHOD_NOT_ALLOWED", "该地址不支持此请求方法", "请检查请求方法后重试",
+            )
         elif exc.status_code == 413:
             code, message, suggestion = "FILE_TOO_LARGE", "文件超过大小上限", "请压缩图片或降低分辨率后重试"
         else:

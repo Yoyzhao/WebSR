@@ -143,14 +143,16 @@ export function toTaskVM(task: Task): TaskVM {
   const percentRaw = task.progress?.percent
   const percent = typeof percentRaw === 'number' ? Math.max(0, Math.min(1, percentRaw)) : 0
   const isRunning = status === 'running' || status === 'queued' || status === 'canceling'
-  const isDone = status === 'done'
+  const isDone = status === 'completed'
   const isFailed = status === 'failed'
   const isInterrupted = status === 'interrupted'
   const degraded = isDone && !!task.resolved?.degraded
 
   const artifacts = task.artifacts ?? []
   const outputs = artifacts.filter((a) => a.kind === 'output').map(artifactVM)
-  const intermediates = artifacts.filter((a) => a.kind === 'intermediate').map(artifactVM)
+  // "其余产物"：契约 v1.0 的 ArtifactKind 是服务端超集（input/output/thumb/log/model），
+  // 前端不再自造 `intermediate` 值——非最终产出的部分统称"其它产物"。
+  const intermediates = artifacts.filter((a) => a.kind !== 'output').map(artifactVM)
 
   const degradeReasons = (task.resolved?.downgrades ?? []).map(
     (d) => `${d.field}：${d.from} → ${d.to}（${d.reason}）`,

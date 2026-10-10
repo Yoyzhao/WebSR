@@ -567,6 +567,12 @@ with TestClient(app) as client:
           and "hardware_fingerprint" in diag["ep_verification"])
 
     # 启动序列第 2 步（非阻塞）已完成
+    # ⚠️ 该步在后台线程执行，是**刻意非阻塞**的（PRD/tech-arch §6.6）；断言必须
+    # **有界等待**而非查一次瞬时值，否则会因调度时序偶发失败（测试竞态，非产品缺陷）。
+    import time  # noqa: E402
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and getattr(app.state, "capability_report", None) is None:
+        time.sleep(0.05)
     check("启动第 2 步写入 capability_report（非阻塞完成）",
           getattr(app.state, "capability_report", None) is not None)
 

@@ -35,8 +35,8 @@ const label = computed(() => {
 
 /** 有降档的"已完成"必须显示为「降级完成」（01 §4.2） */
 const degraded = computed(() => {
-  if (props.degraded !== undefined) return props.degraded && rawStatus.value === 'done'
-  return props.task?.resolved?.degraded === true && rawStatus.value === 'done'
+  if (props.degraded !== undefined) return props.degraded && rawStatus.value === 'completed'
+  return props.task?.resolved?.degraded === true && rawStatus.value === 'completed'
 })
 
 const text = computed(() => {
