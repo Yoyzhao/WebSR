@@ -138,6 +138,8 @@ async function resetDefaults() {
     max_upload_mb: String(UPLOAD.maxSizeMB),
     max_concurrency: '1',
     log_level: 'info',
+    // 下载代理（T-714）：默认空 = 跟随环境变量
+    download_proxy: '',
     // 档位模拟（T-901）：默认 = 总闸关、三项都不声明
     simulation_enabled: 'false',
     force_tier: '',
@@ -221,6 +223,22 @@ onMounted(async () => {
           type="text"
           :value="get('model_dir')"
           @input="set('model_dir', ($event.target as HTMLInputElement).value)"
+        />
+      </SettingsRow>
+    </SectionCard>
+
+    <!-- 网络（T-714）：模型下载等外网请求的代理 -->
+    <SectionCard title="网络" subtitle="模型下载等外网请求使用的代理，保存后下一次下载立即生效">
+      <SettingsRow
+        label="下载代理"
+        hint="支持 http / socks5 等标准写法；留空 = 跟随系统环境变量（ALL_PROXY 等）"
+      >
+        <input
+          class="st-input st-mono"
+          type="text"
+          placeholder="例如 socks5://127.0.0.1:7890"
+          :value="get('download_proxy')"
+          @input="set('download_proxy', ($event.target as HTMLInputElement).value)"
         />
       </SettingsRow>
     </SectionCard>

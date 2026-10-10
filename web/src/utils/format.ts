@@ -56,7 +56,7 @@ export function formatParams(params: {
 } | null | undefined): string {
   if (!params) return '—'
   const parts: string[] = []
-  if (params.scale) parts.push(`×${params.scale}`)
+  if (params.scale) parts.push(params.scale === 1 ? '×1 修复' : `×${params.scale}`)
   if (params.auto) {
     parts.push('tile 自动', '精度自动', '后端自动')
   } else {

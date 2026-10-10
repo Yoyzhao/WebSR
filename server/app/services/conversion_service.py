@@ -180,11 +180,12 @@ def _run(job_id: str, model_id: int) -> None:
 
             out_name = _converted_name(src_model)
             scale = int(src_model.scale or 0)
-            if scale not in (2, 3, 4):
-                # 应用侧只支持 2/3/4 倍；不在这里"改成 4"——那是替用户做决定
+            if scale not in (1, 2, 3, 4):
+                # 应用侧支持 1（修复类）/2/3/4 倍；不在这里"改成 4"——那是替用户做决定
                 return _fail(
                     "unsupported_scale",
-                    f"模型声明的超分倍数为 {scale}，应用侧仅支持 2 / 3 / 4",
+                    f"模型声明的倍数为 {scale}，应用侧仅支持 1 / 2 / 3 / 4"
+                    f"（×1 为修复类，不改变尺寸）",
                     "请修正模型元信息中的倍数后重新导入，或换用受支持的权重",
                 )
 
@@ -223,7 +224,7 @@ def _run(job_id: str, model_id: int) -> None:
             try:
                 row = model_registry.save_import(
                     session,
-                    name=f"{src_model.name}（转换）",
+                    name=f"{src_model.name}{model_registry.CONVERTED_SUFFIX}",
                     fmt="onnx",
                     scale=scale,
                     min_vram_mb=int(src_model.min_vram_mb or 0),

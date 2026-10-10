@@ -350,6 +350,23 @@
 | GET | `/api/models/{id}/convert` | 查询转换状态与结果 | — | `{ job_id, status, model_id, started_at, finished_at, result, error, source_model_id, availability }`（**平铺**，不套 `state`） | ✅ |
 | GET | `/api/models/{id}/export` | 导出模型 | — | 二进制 | ✅ |
 | DELETE | `/api/models/{id}` | 删除模型 | — | `204` | ✅ |
+| GET | `/api/models/download-catalog` | 可下载模型目录（T-713） | — | `{ items: DownloadCatalogEntry[], conversion }`，`items` 按效果优先序；每条含 `downloaded` / `downloaded_model_id` | ✅ |
+| POST | `/api/models/download` | 从目录下载模型（**异步**） | `{ entry_id }` | `202` `{ started, status, entry_id }`；已下载过 `{ started:false, code:"already_downloaded", model_id }`；目录外 id `400 VALIDATION_ERROR` | ✅ |
+| GET | `/api/models/download` | 下载作业状态 | — | `{ status: idle\|running\|completed\|failed, entry_id, received_bytes, total_bytes, model_id, conversion_triggered, error }` | ✅ |
+
+**下载端点补充口径（T-713 定稿）**
+
+- **目录是白名单**：下载 URL 只来自服务端 `download_catalog.py`（每条均经开发机实测：
+  spandrel 识别 → ONNX 转换 → 同源自检 → 多尺寸正确性），请求方**只能传条目 id，不能传 URL**。
+- **流程是链式的**：下载 → 复用 F-05 导入链登记 `.pth`（`status=needs_convert`）→
+  **自动触发** T-807 应用内转换 → 产物登记为新 `.onnx` 模型。前端在
+  `status=completed && conversion_triggered` 后改轮询 `GET /api/models/{model_id}/convert`。
+- **转换环境缺失不是失败**：`.venvs/sr-convert` 不存在时模型保持 `needs_convert` 态
+  （`conversion_triggered=false`），目录响应的 `conversion` 字段给可照做说明。
+- **下载代理**：子进程 curl 依次取 `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` 环境变量，
+  并**剥离**子进程继承的代理变量（只认 `--proxy` 一个来源）。
+- **幂等**：同一权重只登记一次（按源文件名 stem 匹配已登记 `.pth`），重复触发返回
+  `already_downloaded` + 已有模型 id。
 
 **转换端点补充口径（T-807 定稿）**
 
@@ -609,6 +626,7 @@ data: {}
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-10 | **v1.0.3（增补端点，T-713 模型下载）** | §4.3 新增三个端点：`GET /api/models/download-catalog`（可下载模型目录，效果优先白名单，每条含 `downloaded` 状态）、`POST /api/models/download`（异步下载→复用 F-05 导入链登记 `.pth`→自动触发 T-807 应用内转换）、`GET /api/models/download`（下载作业状态）。**只增不改**：既有端点字段集与错误码零变更；URL 仅来自服务端白名单（请求方只传条目 id）；代理取 `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` 环境变量 |
 | 2026-10-10 | **v1.0.2（澄清 + 语义落地，不改变字段集）** | `T-901` 档位模拟开关落地。**`Capabilities.simulation` 的字段集不变**（仍是 `{ enabled, force_tier }`），但语义从「契约占位」变为**真实生效**：`enabled` 表示"确实改变了判定输入"（开了总闸但没声明任何覆盖项时为 `false`），`force_tier` 取自设置项。新增的强制项（`force_vram_mb` / `force_has_tensorrt`）走**既有的通用设置表**（`Setting` 是 `{key,value,type}` 通用结构，**无需契约变更**）。§8.2 允许文案集补一行（档位模拟的 `reasons` 追加文案）。**无字段增删、无错误码变更。** 同时**实现偏差修复**：此前 `simulation` 是写死的 `{enabled:false, force_tier:null}`，而前端在浏览器里自行改写 `tier` 并持久化到 localStorage —— 那是**纯客户端的假象**，后端决策/门控/降级链完全没走模拟档位（违反 PRD §2.3 原则 4 的本意）；现已改为服务端真实生效、前端只消费 |
 | 2026-10-10 | **v1.0.1（澄清，不改变字段集）** | `T-703` 联调澄清 **`ModelOut.available` 的判定顺序**（§3.2）：原表述"按当前档位算的可用性"易被读成"只看显存"，实际语义是"**这台机器此刻能不能跑**"。现明确为 ①登记态 → ②**运行时** → ③显存门槛 三级，任一不满足即置灰且原因写入 `unavailable_reason`。**无字段增删、无错误码变更**；同时**实现侧对齐**：任务终态对模型加载类失败改用契约 §2.3 第 8 条既有的 `MODEL_INCOMPATIBLE` + `detail.code`（原实现误给 `INTERNAL_ERROR`，属**实现偏差修复**而非契约变更） |
 | 2026-10-10 | **v1.0（冻结）** | `T-700` 全量冻结：8 冻结点全部闭合。① **`status` 取值修正**（`done` → `completed`，删除不存在的 `pending`）；② **分页裁决**（v1 不引入分页信封，裸数组）；③ **错误码 16 → 20**；④ **SSE 定值**（心跳 15 s / 不发 `retry:` / 不支持 `Last-Event-ID`）；⑤ **`resolved` 分层定稿**（决策事实 + `execution` 执行事实）；⑥ **`ModelOut` 补 `architecture`/`description`/`status`/`conversion`**；⑦ **`Artifact.kind` 取超集**；⑧ **新增日志端点** `GET /api/tasks/{id}/logs`（定义并实现）；⑨ **前端类型方案定案**（手写 + 一致性校验脚本）；⑩ **新增 §8 `reasons` 文案规范** |

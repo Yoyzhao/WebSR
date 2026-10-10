@@ -252,6 +252,46 @@ export interface ModelConversion {
   reason: string | null
 }
 
+// ---------------------------------------------------------------------------
+// 可下载模型目录（api-contract §4.3 增补，T-713）
+// ---------------------------------------------------------------------------
+
+/** 目录条目 —— 全部经过开发机实测（下载→识别→转换→自检）才进白名单 */
+export interface DownloadCatalogEntry {
+  id: string
+  name: string
+  scale: number
+  architecture: string
+  /** 场景标签：通用照片 / 动漫 */
+  style: string
+  license: string
+  size_bytes: number
+  /** 效果优先序（1 最强）；策展序，非运行时推荐 */
+  effect_rank: number
+  min_vram_mb: number
+  description: string
+  quality_note: string
+  downloaded: boolean
+  downloaded_model_id: string | null
+}
+
+export interface DownloadCatalog {
+  items: DownloadCatalogEntry[]
+  conversion: ModelConversion
+}
+
+/** 下载作业状态（单作业，与 conversion_service 同构） */
+export interface DownloadState {
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  entry_id: string | null
+  received_bytes: number
+  total_bytes: number | null
+  /** 登记后的源模型（.pth）id；转换产物 id 看转换状态接口 */
+  model_id: string | null
+  conversion_triggered: boolean
+  error: { code: string; message: string; reason: string } | null
+}
+
 /** EP 真实性证据（PRD §2.5 F-06：必须有 profile 节点归属作为证据） */
 export interface EpEvidence {
   /** 执行提供器名称 */

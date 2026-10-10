@@ -5,6 +5,96 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/models/download-catalog": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Get Download Catalog",
+        "description": "可下载模型目录（效果优先序，T-713）。每条含 `downloaded` 状态。",
+        "operationId": "get_download_catalog_api_models_download_catalog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Download Catalog Api Models Download Catalog Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models/download": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Download Status",
+        "description": "下载作业状态：`{status, entry_id, received_bytes, total_bytes, model_id, conversion_triggered, error}`。\n\n`status=completed` 后转换可能仍在进行——转换进度看\n`GET /api/models/{model_id}/convert`（T-807 既有端点）。",
+        "operationId": "download_status_api_models_download_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Download Status Api Models Download Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Start Download",
+        "description": "从目录下载模型（**异步**）：下载 → 登记 → 自动进入应用内转换。",
+        "operationId": "start_download_api_models_download_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DownloadIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Start Download Api Models Download Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/models": {
       "get": {
         "tags": [
@@ -1043,6 +1133,19 @@
           "params"
         ],
         "title": "CreateTaskIn"
+      },
+      "DownloadIn": {
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "title": "Entry Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entry_id"
+        ],
+        "title": "DownloadIn"
       },
       "HTTPValidationError": {
         "properties": {

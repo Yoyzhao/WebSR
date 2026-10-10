@@ -26,6 +26,7 @@ from . import settings_store
 from ..db import get_session
 from ..engine.availability import HardwareSnapshot, gate_availability
 from ..models.builtin_catalog import BUILTIN_MODELS, BuiltinModelSpec
+from ..models.download_catalog import DOWNLOAD_CATALOG, DownloadableModelSpec
 from ..models.entities import MODEL_FORMATS, Model
 from ..schemas.model import ModelCapabilities, ModelConversion, ModelOut
 
@@ -121,6 +122,26 @@ def _safe_filename(name: str) -> str:
 
 _CATALOG_BY_PATH: dict[str, BuiltinModelSpec] = {spec.path: spec for spec in BUILTIN_MODELS}
 
+# 离线转换产物的命名后缀（T-719）：产物 = 源模型名 + 本后缀。
+# ⚠️ 生产与消费必须共用这一个常量 —— 列表用它反查"该源是否已转换成功"，
+#    写死成两份字面量一旦漂移，过滤就会静默失效（源 .pth 重新变回噪音）。
+CONVERTED_SUFFIX = "（转换）"
+
+# 下载目录按文件名 stem 索引（T-716）：下载的 .pth 与其应用内转换产物
+# （命名 `{源stem}__from{model_id}.onnx`）共用目录条目里的适配简介与架构名。
+# DB 无 description/architecture 列（由服务层合成），下载链进来的模型不命中
+# 内置目录路径映射，需按 stem 兜底，否则卡片只显示「用户导入模型」。
+_DOWNLOAD_BY_STEM: dict[str, DownloadableModelSpec] = {
+    Path(e.filename).stem: e for e in DOWNLOAD_CATALOG
+}
+
+
+def _download_spec_for(m: Model) -> DownloadableModelSpec | None:
+    stem = Path(m.path).stem
+    if "__from" in stem:
+        stem = stem.split("__from", 1)[0]
+    return _DOWNLOAD_BY_STEM.get(stem)
+
 # 导入模型的能力默认值（T-806 加载器到位后由真实元信息替换；已挂账）
 def default_capabilities(fmt: str) -> dict:
     return {
@@ -136,6 +157,7 @@ def default_capabilities(fmt: str) -> dict:
 
 def serialize_model(m: Model, snapshot: HardwareSnapshot) -> ModelOut:
     spec = _CATALOG_BY_PATH.get(m.path)
+    dl_spec = None if spec else _download_spec_for(m)
     primary = _abs(m.path)
     companion_path = _abs(m.companion_path) if m.companion_path else None
 
@@ -162,8 +184,8 @@ def serialize_model(m: Model, snapshot: HardwareSnapshot) -> ModelOut:
     return ModelOut(
         id=f"{ID_PREFIX}{m.id}",
         name=m.name,
-        architecture=spec.architecture if spec else m.format,
-        description=spec.description if spec else "用户导入模型",
+        architecture=spec.architecture if spec else (dl_spec.architecture if dl_spec else m.format),
+        description=spec.description if spec else (dl_spec.description if dl_spec else "用户导入模型"),
         format=m.format,
         path=f"data/models/{m.path}",
         sha256=m.sha256,
@@ -263,7 +285,16 @@ def list_models(s: Session, snapshot: HardwareSnapshot, fmt: str | None = None) 
         if fmt not in MODEL_FORMATS:
             raise AppError("VALIDATION_ERROR", "未知的模型格式筛选值", "请检查筛选条件后重试", 400)
         stmt = stmt.where(Model.format == fmt)
-    return [serialize_model(m, snapshot) for m in s.scalars(stmt).all()]
+    rows = list(s.scalars(stmt).all())
+    # **已成功转换的源模型不再展示**（T-719）：转换产物以「原名 + CONVERTED_SUFFIX」登记，
+    # 源 .pth 之后只剩"置灰 + 待转换"的噪音——它必然不可用且已完成使命。
+    # 只**隐藏不删数据**：转换失败 / 尚未转换的源模型仍要露出，那才是用户需要看到的状态。
+    produced = {r.name for r in rows if r.status != "invalid"}
+    rows = [
+        m for m in rows
+        if not (m.status == "needs_convert" and f"{m.name}{CONVERTED_SUFFIX}" in produced)
+    ]
+    return [serialize_model(m, snapshot) for m in rows]
 
 
 def save_import(

@@ -16,6 +16,7 @@
 | `task_retention_days` | 下次启动清理时生效（启动序列第 1 步末执行 `cleanup_expired_tasks`） |
 | `max_concurrency` | **已保存但尚未生效**：执行器并发恒为 1（保底档），开放并发属 G-06（T-907） |
 | `log_level` | 立即（重设进程内 root logger）；重启后由启动序列按落库值重设 |
+| `download_proxy` | **立即**（T-714）：每次下载发起时读取；留空 = 跟随 `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` 环境变量 |
 | `simulation_enabled` | **立即生效**（T-901）：开/关档位模拟总闸 |
 | `force_tier` | **立即生效**（T-901）：强制档位（`T0`~`T3`，空 = 不强制），作用于档位判定 |
 | `force_vram_mb` | **立即生效**（T-901）：强制"可用显存"，作用于档位推导**与**模型可用性门控 |
@@ -77,6 +78,9 @@ _SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("max_upload_mb", "number", minimum=1, maximum=4096),
     SettingSpec("max_concurrency", "number", minimum=1, maximum=8),
     SettingSpec("log_level", "string", choices=_LOG_LEVELS),
+    # ---- T-714 下载代理：留空 = 跟随环境变量（既有行为）。URL 校验见 _validate，
+    #      设置层接受的写法与 curl --proxy 认得的写法必须同一套（http/https/socks 系）。
+    SettingSpec("download_proxy", "string", allow_empty=True),
     # ---- T-901 档位模拟（P3-首）：四键一组，空串 = 不强制。校验走 engine/simulation 的解析器，
     #      保证"设置层接受的写法"与"引擎层认得的写法"是同一套（不会出现两边口径漂移）。
     SettingSpec("simulation_enabled", "boolean"),
@@ -196,6 +200,8 @@ def _default(key: str) -> str:
     # T-901：三个"强制项"的默认值都是**空串 = 不强制**（不是"强制为 T0 / 0 显存"）
     if key in ("force_tier", "force_vram_mb", "force_has_tensorrt"):
         return ""
+    if key == "download_proxy":
+        return ""  # T-714：默认不配置 = 下载跟随环境变量
     if key == "calibration_state":
         return "pending"
     raise AppError("INTERNAL_ERROR", f"配置项 {key} 缺少默认值定义", "请导出诊断 JSON 并查看日志", 500)
@@ -302,6 +308,20 @@ def _validate(key: str, value: str) -> str:
                 detail={"key": key, "value": value},
             )
         return str(_parse_vram_mb(raw))
+    # T-714：下载代理用 **curl --proxy 同一套写法**校验——设置层接受而 curl 不认的
+    # 写法会出现"保存成功但下载失败"的静默失败，必须在保存时拦下。
+    if key == "download_proxy":
+        from urllib.parse import urlparse
+
+        parsed = urlparse(raw)
+        if parsed.scheme.lower() not in ("http", "https", "socks4", "socks4a", "socks5", "socks5h") \
+                or not parsed.netloc:
+            raise AppError(
+                "VALIDATION_ERROR", f"「{key}」不是合法的代理地址: {raw}",
+                "格式如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7890，留空表示跟随环境变量",
+                400, detail={"key": key, "value": value},
+            )
+        return raw
     if spec.choices and raw not in spec.choices:
         raise AppError(
             "VALIDATION_ERROR", f"「{key}」取值非法: {raw}",

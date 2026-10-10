@@ -221,9 +221,48 @@ def load_descriptor(src: Path, arch: str | None):
 # 导出
 # ---------------------------------------------------------------------------
 
+def _fold_scalar_defaults(torch, net):
+    """把 forward 中带默认值的**标量超参**显式定值包装（如 RealCUGAN 的 `alpha: float = 1`）。
+
+    动机：TorchScript 追踪器（`dynamo=False`）会把 forward 签名里**被使用的**带默认值
+    标量参数提升为 ONNX 图输入（实测 graph inputs 变成 `['input', 'alpha']`），而产品
+    侧推理只喂单张量 → 图无法执行。包装后标量以字面量进入追踪，被烘焙为常量。
+    语义与"调用方不传该参数"完全等价（默认值就是调用时的值），非模型特判。
+
+    ⚠️ 依赖输入尺寸的 Python 分支（如 RealCUGAN 末端的条件裁剪）在追踪时按探针尺寸
+    烘焙：探针为对齐尺寸（mult-4）时裁剪分支不进图，导出图对 **对齐尺寸** 正确、对
+    任意尺寸**不保证**。产品引擎按 `DEFAULT_ALIGN=8` 补齐 tile，恒喂对齐尺寸 → 链路
+    安全；但本工具产物的 "dynamic" 仅在对齐尺寸口径下成立。
+    """
+    import inspect  # noqa: PLC0415
+    try:
+        sig = inspect.signature(net.forward)
+    except (TypeError, ValueError):
+        return net
+    extras = {}
+    for name, param in list(sig.parameters.items())[1:]:
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        if param.default is not inspect.Parameter.empty and not isinstance(param.default, torch.Tensor):
+            extras[name] = param.default
+    if not extras:
+        return net
+
+    class _Folded(torch.nn.Module):
+        def __init__(self, inner, kwargs):
+            super().__init__()
+            self.inner = inner
+            self.kwargs = kwargs
+
+        def forward(self, x):
+            return self.inner(x, **self.kwargs)
+
+    return _Folded(net, extras).eval()
+
+
 def export_onnx(*, torch, desc, out: Path, static: int | None, fp16: bool, opset: int) -> dict:
     """导出 ONNX。默认动态 H/W；`static=N` 时导出固定 N×N。"""
-    net = desc.model
+    net = _fold_scalar_defaults(torch, desc.model)
     net.eval()
 
     dtype = torch.float16 if fp16 else torch.float32
@@ -347,7 +386,8 @@ def convert(*, src: Path, out: Path, arch: str | None, static: int | None, fp16:
     check = {"ok": True, "skipped": True, "reason": "按参数要求跳过自检（--skip-check）"}
     if not skip_check:
         check = self_check(
-            torch=torch, net=desc.model, onnx_path=tmp, probe=exp["probe"], fp16=fp16, tol=tol,
+            torch=torch, net=_fold_scalar_defaults(torch, desc.model), onnx_path=tmp,
+            probe=exp["probe"], fp16=fp16, tol=tol,
         )
         if not check.get("ok") and not check.get("skipped"):
             tmp.unlink(missing_ok=True)

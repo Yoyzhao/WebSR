@@ -18,14 +18,25 @@ import { toModelVM } from '@/utils/viewModel'
 
 const props = defineProps<{
   model: Model
+  /** 该模型的转换作业是否正在进行（由父级轮询维护） */
+  converting?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'use', id: string): void
   (e: 'delete', id: string): void
+  (e: 'convert', id: string): void
 }>()
 
 const vm = computed(() => toModelVM(props.model))
+
+/**
+ * 「转换为 ONNX」入口（T-719）：`.pth` / `.safetensors` 是训练权重，推理引擎用不了，
+ * 必须转一次。此前只有**下载**路径会自动触发转换，手动导入的权重会永远停在
+ * 「待转换」且没有任何可做的动作 —— 卡片上直接给出按钮，转换环境未安装时只说明原因。
+ */
+const needsConvert = computed(() => props.model.status === 'needs_convert')
+const canConvert = computed(() => needsConvert.value && props.model.conversion?.available === true)
 
 function onUse() {
   if (vm.value.disabled) return
@@ -88,8 +99,21 @@ function onUse() {
     </div>
 
     <footer class="mc-foot">
-      <span v-if="vm.disabled" class="mc-reason">{{ vm.disabledReason }}</span>
-      <button v-else type="button" class="mc-use" @click="onUse">使用此模型</button>
+      <template v-if="canConvert">
+        <button
+          type="button"
+          class="mc-convert"
+          :disabled="converting"
+          :title="converting ? '转换进行中，完成后会自动刷新' : '把该模型转换为 ONNX 格式（推理引擎只认 ONNX）'"
+          @click="emit('convert', vm.id)"
+        >
+          {{ converting ? '转换中…' : '转换为 ONNX' }}
+        </button>
+      </template>
+      <template v-else>
+        <span v-if="vm.disabled" class="mc-reason">{{ vm.disabledReason }}</span>
+        <button v-else type="button" class="mc-use" @click="onUse">使用此模型</button>
+      </template>
     </footer>
   </article>
 </template>
@@ -206,9 +230,10 @@ function onUse() {
   font-size: var(--font-size-13);
   line-height: 18px;
   color: var(--Theme-text-secondary);
+  /* 适配简介（T-716）为「定位 + 适合 + 不适合」三段句，2 行截不全 → 放宽到 3 行 */
   display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -298,6 +323,31 @@ function onUse() {
   border-color: var(--Theme-primary);
   color: var(--Theme-primary);
   background: color-mix(in srgb, var(--Theme-primary) 10%, transparent);
+}
+
+/* 「转换为 ONNX」是**当前唯一可做的动作**，用主色实心强调，区别于次要的「使用此模型」 */
+.mc-convert {
+  appearance: none;
+  width: 100%;
+  border: 1px solid var(--Theme-primary);
+  background: var(--Theme-primary);
+  color: #fff;
+  font-family: inherit;
+  font-size: var(--font-size-13);
+  line-height: 18px;
+  padding: 4px 12px;
+  border-radius: var(--Scale-radius-button);
+  cursor: pointer;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.mc-convert:hover {
+  opacity: 0.9;
+}
+
+.mc-convert:disabled {
+  opacity: 0.55;
+  cursor: progress;
 }
 
 .mc-mono {

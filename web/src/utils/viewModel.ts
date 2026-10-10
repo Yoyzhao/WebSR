@@ -66,6 +66,8 @@ export interface TaskVM {
   sourceWidth: number
   sourceHeight: number
   sourceResolution: string
+  /** 源图缩略图 URL（前端派生，`client.ts::normalizeTask`；缺失/加载失败时回退占位） */
+  sourceThumb?: string
   outputResolution: string
   /** 产出与中间图 */
   outputs: ArtifactVM[]
@@ -185,6 +187,7 @@ export function toTaskVM(task: Task): TaskVM {
     sourceWidth: task.source_width,
     sourceHeight: task.source_height,
     sourceResolution: formatResolution(task.source_width, task.source_height),
+    sourceThumb: task.source_thumb,
     outputResolution:
       task.output_width && task.output_height ? formatResolution(task.output_width, task.output_height) : '',
     outputs,
@@ -232,7 +235,8 @@ export function toModelVM(model: Model): ModelVM {
     name: model.name,
     architecture: model.architecture || '',
     format: model.format ?? '',
-    scaleText: model.scale ? `×${model.scale}` : '',
+    // ×1 是修复类（不改变尺寸），单写「×1」会被误读成放大一档 → 标签带语义
+    scaleText: model.scale === 1 ? '×1 修复' : model.scale ? `×${model.scale}` : '',
     description: model.description ?? '',
     minVramText: model.min_vram_mb ? `${requiredGb.toFixed(1)} GB` : '不适用',
     fileSizeText: formatBytes(model.size_bytes),

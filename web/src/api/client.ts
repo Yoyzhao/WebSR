@@ -12,6 +12,8 @@
 import { describeError } from './errorMessages'
 import type {
   Capabilities,
+  DownloadCatalog,
+  DownloadState,
   LogEntry,
   Model,
   Setting,
@@ -221,6 +223,27 @@ export async function importModel(payload: ImportModelPayload): Promise<Model> {
 
 export async function deleteModel(id: string): Promise<void> {
   await request<void>(`/models/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ---------------------------------------------------------------------------
+// 可下载模型目录（api-contract §4.3 增补，T-713）
+// ---------------------------------------------------------------------------
+
+export async function fetchDownloadCatalog(): Promise<DownloadCatalog> {
+  return request<DownloadCatalog>('/models/download-catalog')
+}
+
+export async function startModelDownload(
+  entryId: string,
+): Promise<{ started: boolean; status?: string; reason?: string; model_id?: string }> {
+  return request('/models/download', {
+    method: 'POST',
+    body: JSON.stringify({ entry_id: entryId }),
+  })
+}
+
+export async function fetchDownloadStatus(): Promise<DownloadState> {
+  return request<DownloadState>('/models/download')
 }
 
 // ---------------------------------------------------------------------------

@@ -179,10 +179,11 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 > 📌 **模型统一存放于 `data/models/`**（用户指定的应用数据目录，2026-09-30 从 `.workbuddy/models/` 迁入）。
 > 迁移后已用 `tools/p0_1_cuda_smoke.py` 做端到端验证：**1024 节点全在 CUDA，输出 mean 0.534278 与迁移前一致**。
 >
-> **产品内置登记 5 项**（`server/app/models/builtin_catalog.py` 声明，启动时按 path upsert）：
+> **产品内置登记 7 项**（`server/app/models/builtin_catalog.py` 声明，启动时按 path upsert）：
 > **通用/写实、动漫、轻量通用三个风格各占一项**——风格由「模型」区分，**不由参数区分**
-> （PRD §7.3：模型不做自动推荐，选择权在用户）；另两项是主模型的 fp16 与 OpenVINO IR 技术变体。
-> 标「基准」的**不登记**（开发期产物）。后两项风格模型由 `tools/convert_to_onnx.py` 离线转换得到。
+> （PRD §7.3：模型不做自动推荐，选择权在用户）；另两项是主模型的 fp16 与 OpenVINO IR 技术变体；
+> 2026-10-10 增补 ×2/×3 各一项补齐多倍率（此前全部 ×4，倍率 2/3 恒置灰是资产缺口非能力缺口）。
+> 标「基准」的**不登记**（开发期产物）。风格与多倍率模型由 `tools/convert_to_onnx.py` 离线转换得到。
 
 | 文件 | 大小 | 说明 |
 |---|---|---|
@@ -191,6 +192,8 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `realesr-general-x4v3.onnx` | 4,866,394 B | **内置③** 轻量通用（SRVGGNetCompact，1,213,296 参数；自检 4.08e-06）。sha256 `ba3e0db2…f8f6169` |
 | `RealESRGAN_x4_fp16.onnx` | 33,748,503 B | **内置④** 主模型 fp16（Resize 保持 fp32） |
 | `ir/RealESRGAN_x4_fp16.xml` + `.bin` | 31.85 MB | **内置⑤** OpenVINO IR（Intel 核显 / 集显路径，走原生 API） |
+| `RealESRGAN_x2plus.onnx` | 67,156,233 B | **内置⑥** 通用 ×2（RRDBNet，16,703,171 参数；转自官方 `RealESRGAN_x2plus.pth`，同源自检 1.97e-06） |
+| `RealCUGAN_up3x.onnx` | 5,175,535 B | **内置⑦** 动漫 ×3（RealCUGAN，1,286,326 参数；转自 B 站官方 `up3x-latest-no-denoise.pth`，MIT，自检 3.81e-06）。⚠️ 动态导出的尺寸分支按对齐探针烘焙——产物仅对 **4 的倍数**输入保证正确（引擎 tile 恒按 `DEFAULT_ALIGN=8` 补齐，链路安全） |
 | `RealESRGAN_x4_fp16all.onnx` | 33,748,503 B | 基准 · 全量 fp16 |
 | `RealESRGAN_x4_s512.onnx` | 67,129,351 B | 基准 · H/W 冻结为 512 的静态 shape 版 |
 | `ir/RealESRGAN_x4_fp32.xml` + `.bin` | 63.7 MB | 基准 · fp32 IR 对 |
@@ -229,6 +232,7 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 |---|---|
 | `data_root` | 立即对**后续新建任务**生效（不迁移既有文件） |
 | `max_upload_mb` / `log_level` | 立即 |
+| `download_proxy` | 立即（T-714）：模型下载发起时读取；留空 = 跟随 `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` 环境变量。校验与 curl `--proxy` 同一套写法（http/https/socks 系） |
 | `task_retention_days` | 下次启动清理时生效（启动序列第 4 步） |
 | `max_concurrency` | **已保存但尚未生效** —— 开放并发属 G-06（T-907） |
 | `simulation_enabled` | **已保存但尚未生效** —— 档位模拟属 P3（T-901） |

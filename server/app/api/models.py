@@ -17,18 +17,56 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 
 from ..core.errors import AppError
 from ..db import get_session
 from ..engine.availability import probe_hardware_snapshot
 from ..schemas.model import ModelOut
 from ..services import conversion_service
+from ..services import download_service
 from ..services import model_registry as reg
 from ..services import simulation as simulation_service
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
 _BACKENDS = {"cpu", "cuda", "openvino", "tensorrt", "ncnn"}
+
+
+class DownloadIn(BaseModel):
+    entry_id: str
+
+
+@router.get("/download-catalog")
+def get_download_catalog() -> dict:
+    """可下载模型目录（效果优先序，T-713）。每条含 `downloaded` 状态。"""
+    return download_service.catalog()
+
+
+@router.post("/download", status_code=202)
+def start_download(body: DownloadIn) -> dict:
+    """从目录下载模型（**异步**）：下载 → 登记 → 自动进入应用内转换。"""
+    result = download_service.trigger(body.entry_id)
+    if not result.get("started"):
+        code = result.get("code")
+        if code == "already_downloaded":
+            return {**result, "status": "already_downloaded"}
+        if code == "curl_missing":
+            raise AppError("DOWNLOAD_FAILED", "系统缺少 curl，无法下载",
+                           result.get("reason") or "", 409)
+        if result.get("reason") == "已有下载在进行中":
+            return {**result, "status": "running"}
+    return result
+
+
+@router.get("/download")
+def download_status() -> dict:
+    """下载作业状态：`{status, entry_id, received_bytes, total_bytes, model_id, conversion_triggered, error}`。
+
+    `status=completed` 后转换可能仍在进行——转换进度看
+    `GET /api/models/{model_id}/convert`（T-807 既有端点）。
+    """
+    return download_service.serialize_state()
 
 
 @router.get("")
@@ -78,8 +116,13 @@ async def import_model(
             "VALIDATION_ERROR", f"未知后端标识: {sorted(unknown)}",
             f"可用值为 {sorted(_BACKENDS)}", 400,
         )
-    if scale not in (2, 3, 4):
-        raise AppError("VALIDATION_ERROR", "超分倍数仅支持 2 / 3 / 4", "请调整倍数后重试", 400)
+    # ×1 = 修复类（去噪 / 去压缩痕，输出尺寸 = 输入尺寸），与 ×2/×3/×4 放大类并列；
+    # 引擎侧 scale >= 1 全链路自洽（输出尺寸 = 原图 × scale，1 即不变）。
+    if scale not in (1, 2, 3, 4):
+        raise AppError(
+            "VALIDATION_ERROR", "倍数仅支持 1 / 2 / 3 / 4（×1 为修复类，不改变尺寸）",
+            "请调整倍数后重试", 400,
+        )
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="websr_import_"))
     primary_tmp = await _spool(file, tmp_dir)

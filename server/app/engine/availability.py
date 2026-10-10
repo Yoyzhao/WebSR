@@ -95,7 +95,9 @@ def gate_availability(
     曾被判为「可用」，用户选中后必然失败（详见 T-703）。
     """
     if status == "needs_convert":
-        return False, "该模型需先离线转换为 .onnx 后使用"
+        # 文案改说人话（T-719）："离线转换"是内部术语，用户不知道该做什么。
+        # 直接说明"这是训练权重、要转成 ONNX"，与卡片上的「转换为 ONNX」按钮呼应。
+        return False, "这是训练权重格式（.pth/.safetensors），需转换为 ONNX 后才能使用"
     if status == "invalid":
         return False, "模型文件校验未通过，请重新导入"
     if fmt is not None:

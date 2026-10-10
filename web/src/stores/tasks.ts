@@ -31,8 +31,26 @@ export const useTaskStore = defineStore('tasks', () => {
 
   const latestTask = computed(() => tasks.value[0] ?? null)
 
-  /** 当前预览的任务：优先进行中，否则取最近一条 */
-  const previewTask = computed(() => runningTasks.value[0] ?? latestTask.value)
+  /**
+   * 会话内出现过的任务 id（= 由本页 `submit()` 提交的任务）。
+   * 工作台预览**只跟随这些任务**：页面加载默认为空态，不回放历史任务的图
+   * （T-711 用户反馈「工作台默认为空，不要显示最近的图片」）；
+   * 提交后从进行中一路跟随到终态 —— 否则任务跑完离开 running 集合的瞬间
+   * 预览会突然清空，观感是"进度看完就没了"。
+   */
+  const sessionTaskIds = ref(new Set<string>())
+
+  /** 当前预览的任务：会话内优先进行中，否则取会话内最近一条；会话外一律空 */
+  const previewTask = computed(() => {
+    const seen = sessionTaskIds.value
+    if (seen.size === 0) return null
+    // tasks 按新→旧排序：find 命中的即会话内最近一条
+    return (
+      runningTasks.value.find((t) => seen.has(t.id)) ??
+      tasks.value.find((t) => seen.has(t.id)) ??
+      null
+    )
+  })
 
   async function load(): Promise<void> {
     loading.value = true
@@ -97,6 +115,8 @@ export const useTaskStore = defineStore('tasks', () => {
     const task = await createTask(fileId, params)
     tasks.value = [task, ...tasks.value]
     activeTaskId.value = task.id
+    // 纳入会话跟踪：工作台预览从这一刻开始跟随本任务（含终态后的结果展示）
+    sessionTaskIds.value.add(task.id)
     subscribe(task)
     return task
   }

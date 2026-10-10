@@ -2,8 +2,8 @@
 /**
  * 任务中心 —— 全量任务列表 + 对比视图（P2，docs/prototype/01-页面结构与布局.md §4）。
  *
- * 列定义（7 列，固定列合计 974 + 20px 列沟）：
- *   文件名(自适应) ｜ 模型/后端(300) ｜ 倍率(88,左对齐) ｜ 状态(自适应) ｜ 耗时(120,右对齐) ｜ 产出(180,右对齐) ｜ 操作(176)
+ * 列定义（7 列，固定列合计 1022 + 20px 列沟；T-718 起文件列带缩略图）：
+ *   文件名+缩略图(自适应) ｜ 模型/后端(260) ｜ 倍率(88,左对齐) ｜ 状态(自适应) ｜ 耗时(120,右对齐) ｜ 产出(180,右对齐) ｜ 操作(224,不换行)
  *
  * 约束：
  *   - 表格**不加纵向边框线、不加斑马纹**（禁止事项第 7 条）。
@@ -37,6 +37,12 @@ const taskStore = useTaskStore()
 const filter = ref<'all' | 'running' | 'completed' | 'failed'>('all')
 const detailOpen = ref(false)
 const detailTaskId = ref<string | null>(null)
+
+/**
+ * 缩略图加载失败的 task id 集合 —— 失败后回退占位图标，
+ * 而不是留着破图图标（img 的 onerror 无法自愈，必须在响应式侧记账）。
+ */
+const thumbFailed = ref(new Set<string>())
 
 // 对比视图
 const compareTaskId = ref<string | null>(null)
@@ -270,12 +276,12 @@ watch(
         <table class="tp-table">
           <colgroup>
             <col />
-            <col style="width: 300px" />
+            <col style="width: 260px" />
             <col style="width: 88px" />
             <col />
             <col style="width: 120px" />
             <col style="width: 180px" />
-            <col style="width: 176px" />
+            <col style="width: 224px" />
           </colgroup>
           <thead>
             <tr>
@@ -292,8 +298,28 @@ watch(
             <tr v-for="vm in vms(filtered)" :key="vm.id" class="tp-row" @click="openDetail(vm.id)">
               <td>
                 <div class="tp-file">
-                  <span class="tp-file-name" :title="vm.filename">{{ vm.filename }}</span>
-                  <span class="tp-file-sub tp-mono">{{ vm.createdText }}</span>
+                  <div class="tp-file-main">
+                    <!-- 缩略图：加载失败回退占位块（避免破图图标），行高恒 40px 不跳动 -->
+                    <img
+                      v-if="vm.sourceThumb && !thumbFailed.has(vm.id)"
+                      class="tp-thumb"
+                      :src="vm.sourceThumb"
+                      alt=""
+                      loading="lazy"
+                      @error="thumbFailed.add(vm.id)"
+                    />
+                    <div v-else class="tp-thumb tp-thumb-ph" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+                        <circle cx="9" cy="10" r="1.8" />
+                        <path d="M4.5 17.5 L10 12 L14 15.5 L17 13 L19.5 15.5" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </div>
+                    <div class="tp-file-text">
+                      <span class="tp-file-name" :title="vm.filename">{{ vm.filename }}</span>
+                      <span class="tp-file-sub tp-mono">{{ vm.createdText }}</span>
+                    </div>
+                  </div>
                 </div>
               </td>
               <td>
@@ -313,7 +339,7 @@ watch(
               </td>
               <td class="tp-right tp-mono">{{ vm.durationText || '—' }}</td>
               <td class="tp-right tp-mono">{{ vm.outputResolution || '—' }}</td>
-              <td class="tp-right" @click.stop>
+              <td class="tp-right tp-actions" @click.stop>
                 <ActionButtons
                   :actions="
                     [
@@ -452,12 +478,64 @@ watch(
   background: var(--Theme-bg-hover);
 }
 
+/* ⚠️ `.tp-table th` 的 text-align:left 特异性 (0,1,1) 高于 `.tp-right` (0,1,0)，
+   会把表头的右对齐覆盖掉 —— 数字/操作列表头因此偏左、与内容错位。
+   用更高特异性让表头与各列内容的对齐方式严格一致（文本列左、数值/操作列右）。 */
+.tp-table th.tp-left {
+  text-align: left;
+}
+
+.tp-table th.tp-right {
+  text-align: right;
+}
+
 .tp-left {
   text-align: left;
 }
 
 .tp-right {
   text-align: right;
+}
+
+/* 操作列：最多可同时出现 对比/下载/取消/重试 四个按钮，
+   列宽已按四按钮一行预留（224px），这里禁掉换行兜底 ——
+   极窄屏由 .tp-table-wrap 的横向滚动接管，而不是折成两行。 */
+.tp-actions :deep(.action-buttons) {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+/* 文件列：缩略图 + 文件名/时间 双行文本 */
+.tp-file-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tp-thumb {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: var(--Scale-radius-card, 6px);
+  object-fit: cover;
+  background: var(--Theme-bg-hover);
+  border: 1px solid var(--Theme-border-subtle);
+}
+
+/* 占位块：与缩略图同尺寸，行高不因加载失败而跳动 */
+.tp-thumb-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--Theme-text-tertiary);
+}
+
+.tp-file-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
 .tp-file {

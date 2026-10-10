@@ -75,6 +75,9 @@ const form = ref({
 // ---------------------------------------------------------------------------
 const selectedModel = computed(() => models.value.find((m) => m.id === form.value.modelId) ?? null)
 
+/** 所选模型的适配简介（T-716）：随模型行展示，让用户在工作台内即可确认选型是否匹配素材 */
+const selectedModelDesc = computed(() => selectedModel.value?.description ?? '')
+
 const detailTask = computed(() => taskStore.tasks.find((t) => t.id === detailTaskId.value) ?? null)
 
 const previewTask = computed(() => taskStore.previewTask)
@@ -97,44 +100,71 @@ const backendOptions = computed(() => {
   }))
 })
 
-const modelOptions = computed(() =>
-  models.value.map((m) => ({
-    label: m.available ? m.name : `${m.name}（不可用）`,
-    value: m.id,
-    disabled: !m.available,
-  })),
-)
+const modelOptions = computed(() => {
+  // 加载中给独立占位：若直接落到下面的「暂无模型」占位，会在列表到达前
+  // 闪现误导文案（且让「option 数 >0」的下游判据提前成立——e2e 实测踩坑）
+  if (modelsLoading.value) return [{ label: '模型列表加载中…', value: '', disabled: true }]
+  const opts = models.value
+    .filter((m) => m.scale === form.value.scale)
+    .map((m) => ({
+      label: m.available ? m.name : `${m.name}（不可用）`,
+      value: m.id,
+      disabled: !m.available,
+    }))
+  // 该倍率下模型库存为 0：给一个不可选的占位项，避免 select 空白且无解释
+  return opts.length > 0
+    ? opts
+    : [{ label: '该倍率下暂无模型，可到模型库下载或导入', value: '', disabled: true }]
+})
 
 /**
- * 倍率选项 —— **受所选模型约束**（F-02）。
+ * 倍率与模型 —— T-715 起改为**倍率先行**：先选放大倍数（任务目标），模型下拉只列
+ * 该倍率的模型（实现手段）。此前是「模型先行、倍率受模型约束」（T-706），
+ * 选 ×2 模型后 ×3/×4 恒置灰，视觉噪音大，也与「先定目标再选手段」的用户心智相反。
  *
- * 推理网络只支持**固定**倍数：内置 5 个均为 ×4（`server/app/models/builtin_catalog.py`），
- * 导入模型用导入时声明的 `scale`。此前 ×2/×3/×4 恒可选，用户选了模型不支持的倍数后
- * 会得到一个**无法自我解释**的「推理执行失败 / 请导出诊断 JSON」。
- * 此处把不支持的档位置灰并写明原因（能力缺口前置到界面，与契约 §2.3 第 10 条同源）；
- * 服务端另有同口径校验兜底（提交时拒绝，防止绕过界面直接调接口）。
+ * 倍率可选性 = 模型**库存**里存在该倍率（不问 available：全部被显存门控置灰时
+ * 倍率仍可选，具体原因在模型行逐项展示；库存为 0 才置灰）。模型列表未到达时
+ * 一律不置灰（宁可可选，不误灰——与门控口径 §2.3 第 10 条同源）。
+ * 服务端校验不变（model_id + scale 必须匹配，提交时兜底拒绝）。
  */
-const modelScale = computed(() => selectedModel.value?.scale ?? null)
+/**
+ * 倍率候选 —— ×1 是**修复类**（去噪 / 去压缩痕，输出尺寸不变），与放大类并列。
+ * 标签必须区分二者：否则用户会以为选 ×1 也能变大，结果与预期相反。
+ */
+const SCALE_CHOICES: readonly number[] = [1, 2, 3, 4]
 
 const scaleOptions = computed(() => {
-  const s = modelScale.value
-  return [2, 3, 4].map((v) => ({
-    label: `×${v}`,
+  const hasModels = !modelsLoading.value && models.value.length > 0
+  const scales = new Set(models.value.map((m) => m.scale))
+  return SCALE_CHOICES.map((v) => ({
+    label: v === 1 ? '×1 修复' : `×${v}`,
     value: String(v),
-    disabled: s !== null && v !== s,
+    disabled: hasModels && !scales.has(v),
   }))
 })
 
-const scaleHint = computed(() =>
-  modelScale.value
-    ? `该模型为 ×${modelScale.value}，其余倍率不可选`
-    : '以模型声明的倍数为准',
-)
-
-/** 模型切换后若当前倍率不再被支持，对齐到该模型的倍数（否则表单会停在一个非法值上） */
-watch(modelScale, (s) => {
-  if (s && form.value.scale !== s) form.value.scale = s
+const scaleHint = computed(() => {
+  if (modelsLoading.value || models.value.length === 0) return '以模型声明的倍数为准'
+  const n = models.value.filter((m) => m.scale === form.value.scale).length
+  if (form.value.scale === 1) {
+    return n > 0
+      ? `有 ${n} 个 ×1 修复模型可选（不改变尺寸，只修复画质）`
+      : '暂无 ×1 修复模型，可到模型库下载或导入'
+  }
+  return n > 0
+    ? `有 ${n} 个 ×${form.value.scale} 模型可选`
+    : `暂无 ×${form.value.scale} 模型，可到模型库下载或导入`
 })
+
+/** 倍率切换后，若当前模型不属于新倍率，对齐到该倍率下第一个可用模型（无可用则置空） */
+watch(
+  () => form.value.scale,
+  (s) => {
+    const cands = models.value.filter((m) => m.scale === s)
+    if (cands.some((m) => m.id === form.value.modelId)) return
+    form.value.modelId = cands.find((m) => m.available)?.id ?? ''
+  },
+)
 
 /** 参数面板：自动档时三项只读（引擎决定），手动档才可编辑 */
 const paramsLocked = computed(() => autoMode.value)
@@ -289,10 +319,15 @@ onMounted(async () => {
       ? models.value.find((m) => m.id === wanted && m.available)
       : undefined
     if (deepLink) {
+      // 倍率先行（T-715）：深链以模型为准反推倍率，两处一起显式赋值
+      form.value.scale = deepLink.scale
       form.value.modelId = deepLink.id
     } else if (!models.value.some((m) => m.id === form.value.modelId && m.available)) {
-      const firstAvailable = models.value.find((m) => m.available)
+      // 默认模型：优先当前倍率（×4）下的可用项，再退全库第一个可用项
+      const firstAvailable = models.value.find((m) => m.available && m.scale === form.value.scale)
+        ?? models.value.find((m) => m.available)
       form.value.modelId = firstAvailable?.id ?? ''
+      if (firstAvailable) form.value.scale = firstAvailable.scale
     }
   } finally {
     modelsLoading.value = false
@@ -302,7 +337,7 @@ onMounted(async () => {
 
 <template>
   <div class="wb">
-    <PageHeader title="工作台" subtitle="上传图像 → 选择模型 → 提交超分修复">
+    <PageHeader title="工作台" subtitle="上传图像 → 选择倍率与模型 → 提交超分修复">
       <template #actions>
         <div class="wb-head-actions">
           <button v-if="isCompact" type="button" class="wb-chip" @click="paramsDrawer = true">
@@ -361,14 +396,6 @@ onMounted(async () => {
             />
           </SettingsRow>
 
-          <SettingsRow label="模型" hint="模型始终由你选择，引擎不做推荐">
-            <select v-model="form.modelId" class="wb-select" :disabled="modelsLoading">
-              <option v-for="o in modelOptions" :key="o.value" :value="o.value" :disabled="o.disabled">
-                {{ o.label }}
-              </option>
-            </select>
-          </SettingsRow>
-
           <SettingsRow label="放大倍数" :hint="scaleHint">
             <SegmentedControl
               :model-value="String(form.scale)"
@@ -376,6 +403,17 @@ onMounted(async () => {
               size="sm"
               @update:model-value="form.scale = Number($event)"
             />
+          </SettingsRow>
+
+          <SettingsRow label="模型" hint="模型始终由你选择，引擎不做推荐">
+            <select v-model="form.modelId" class="wb-select" :disabled="modelsLoading">
+              <option v-for="o in modelOptions" :key="o.value" :value="o.value" :disabled="o.disabled">
+                {{ o.label }}
+              </option>
+            </select>
+            <p v-if="selectedModelDesc" class="wb-model-desc" :title="selectedModelDesc">
+              {{ selectedModelDesc }}
+            </p>
           </SettingsRow>
 
           <SettingsRow label="分块 tile" :hint="paramsLocked ? '自动档下由引擎决定' : '越小的 tile 越省显存，但更慢'">
@@ -483,8 +521,8 @@ onMounted(async () => {
             <EmptyState
               v-else
               icon-size="48"
-              title="还没有任务"
-              description="上传一张图像并提交超分任务，这里会显示实时预览与进度"
+              title="暂无预览任务"
+              description="上传一张图像并提交超分任务，实时预览与进度将显示在这里；历史任务见右侧列表或任务中心"
             />
           </div>
         </SectionCard>
@@ -510,7 +548,7 @@ onMounted(async () => {
 
       <!-- ============ 右栏：最近任务 ============ -->
       <aside v-if="isWide" class="wb-col wb-col-right">
-        <SectionCard title="最近任务" :subtitle="`共 ${taskStore.tasks.length} 条 · 进行中 ${taskStore.runningTasks.length}`">
+        <SectionCard title="最近任务" class="wb-tasks-card" :subtitle="`共 ${taskStore.tasks.length} 条 · 进行中 ${taskStore.runningTasks.length}`">
           <div v-if="taskStore.tasks.length === 0" class="wb-none">暂无任务</div>
           <div v-else class="wb-task-list">
             <TaskCard
@@ -542,13 +580,6 @@ onMounted(async () => {
             @update:model-value="autoMode = $event === 'auto'"
           />
         </SettingsRow>
-        <SettingsRow label="模型">
-          <select v-model="form.modelId" class="wb-select">
-            <option v-for="o in modelOptions" :key="o.value" :value="o.value" :disabled="o.disabled">
-              {{ o.label }}
-            </option>
-          </select>
-        </SettingsRow>
         <SettingsRow label="放大倍数" :hint="scaleHint">
           <SegmentedControl
             :model-value="String(form.scale)"
@@ -556,6 +587,16 @@ onMounted(async () => {
             size="sm"
             @update:model-value="form.scale = Number($event)"
           />
+        </SettingsRow>
+        <SettingsRow label="模型">
+          <select v-model="form.modelId" class="wb-select">
+            <option v-for="o in modelOptions" :key="o.value" :value="o.value" :disabled="o.disabled">
+              {{ o.label }}
+            </option>
+          </select>
+          <p v-if="selectedModelDesc" class="wb-model-desc" :title="selectedModelDesc">
+            {{ selectedModelDesc }}
+          </p>
         </SettingsRow>
         <SettingsRow label="分块 tile">
           <SegmentedControl
@@ -625,6 +666,10 @@ onMounted(async () => {
   flex-direction: column;
   gap: 20px;
   padding: 24px 28px 40px;
+  /* 占满 app-main 的可视高度：内容不足一屏时工作台贴底，
+   * 而不是三栏卡片悬在页面中部（底部对齐的前提）。
+   * 内容超一屏时自然向下生长，滚动行为不变。 */
+  min-height: 100%;
 }
 
 .wb-head-actions {
@@ -670,7 +715,12 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 20px;
-  align-items: start;
+  /* 占满 .wb 的剩余高度（min-height:100% 保证可视区内必有余量），
+   * 让三栏底边落到同一条线上。内容更高时按内容生长，不压缩。 */
+  flex: 1 1 auto;
+  /* 三栏等高（grid 默认 stretch）。原 `align-items: start` 使各栏按内容
+   * 自然收尾、底边参差；改为拉伸后由每栏的「弹性卡」吸收剩余高度，
+   * 见下方 .wb-stretch 组。 */
 }
 
 .wb-grid.is-wide {
@@ -688,6 +738,48 @@ onMounted(async () => {
   flex-direction: column;
   gap: 16px;
   min-width: 0;
+}
+
+/* ---- 底边对齐：每栏指定一张「弹性卡」吸收剩余高度 ----
+ * 三栏内容量天然不同（左≈上传+6 行参数，中≈预览，右≈任务列表），
+ * 若都按内容收尾，底边一定参差。做法：
+ *   左栏  参数卡弹性（footer「当前档位」随卡片沉底）
+ *   中栏  预览卡弹性（预览区是本页视觉主体，多余高度优先给画布）
+ *   右栏  任务卡弹性（footer「查看全部任务」随卡片沉底）
+ * 「待提交任务」卡保持内容高度，始终垫在预览卡下方贴底。 */
+.wb-col-left .wb-params,
+.wb-col-main .wb-preview-card,
+.wb-col-right .wb-tasks-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 弹性卡内部：body 吃掉剩余高度，footer 才能贴到卡底 */
+.wb-col-left .wb-params :deep(.section-card__body),
+.wb-col-main .wb-preview-card :deep(.section-card__body),
+.wb-col-right .wb-tasks-card :deep(.section-card__body) {
+  flex: 1 1 auto;
+}
+
+/* 预览卡弹性后，多余高度全部给画布（stage 本身已居中内容），
+ * 图像越大预览越有效（05 §2.2：预览区尺寸直接转化为可用预览面积） */
+.wb-preview-card :deep(.section-card__body) {
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-preview {
+  flex: 1 1 auto;
+}
+
+.wb-preview-stage {
+  flex: 1 1 auto;
+}
+
+/* 无任务时 EmptyState 是 .wb-preview 的独子：垂直居中而非顶在卡头 */
+.wb-preview > :only-child {
+  margin: auto;
 }
 
 /* ---------- 上传 ---------- */
@@ -830,6 +922,21 @@ onMounted(async () => {
 
 .wb-select:focus {
   border-color: var(--Theme-primary);
+}
+
+/* 模型适配简介（T-716）：随所选模型展示，与 hint 同级的小字、随控件列左对齐。
+ * 简介文案较长（60–90 字），限 3 行防参数卡被撑高，全文悬浮 title 可见。 */
+.wb-model-desc {
+  margin: 2px 0 0;
+  width: 100%;
+  font-size: var(--font-size-12);
+  line-height: 17px;
+  color: var(--Theme-text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* ---- 窄栏参数行（左栏参数卡片与窄屏参数抽屉共用） ----
