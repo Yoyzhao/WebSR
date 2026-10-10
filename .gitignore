@@ -130,6 +130,12 @@ web/*.tsbuildinfo
 .workbuddy/verify/t703/out/beach_1to1.png
 .workbuddy/verify/t703/run.txt
 
+# ---- T-704 异常与降级链联调产物 ----
+# 可复用的验证件是 `scripts/test-script/verify_t704_degradation.py`（入库）；
+# `.workbuddy/verify/t704/probe_oom.py` 是**开发期一次性探针**（只用于探 tile 阈值与错误形态，
+# 结论已固化进主脚本）→ **不入库**，与 `_t807_tool_probe.py` 同一取舍。
+.workbuddy/verify/t704/
+
 # ---- 验证脚本的原始运行日志（可随时重跑生成，不入库）----
 # 保留了 `regress_*.txt`（跨任务全量回归摘要，高信噪比证据）。
 .workbuddy/verify/*_run.txt

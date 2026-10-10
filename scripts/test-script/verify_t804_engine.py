@@ -352,6 +352,39 @@ check("OOM 正例：WinError 1455（页面文件不足）",
 check("OOM 正例：中文'显存不足'", watermark.is_oom_error(RuntimeError("显存不足，无法分配")))
 check("OOM 负例：普通异常不误判", not watermark.is_oom_error(ValueError("shape mismatch")))
 
+# ---- 包装穿透（T-704 联调发现）：真实 OOM **不会**以裸异常形态到达这里 -------------
+# `model_loader.ModelLoadError.__init__` 调 `super().__init__(message)`，于是 `str(exc)`
+# 只剩「推理执行失败」，原始 `Failed to allocate memory` 只存在于 `detail["exception"]`
+# 与 `__cause__` 链 —— 只读 `str(exc)` 的判定对**真实 OOM 恒为 False**，
+# 导致"不降档、不重试 + 终态报 INTERNAL_ERROR"（恰好在该起作用时失效）。
+from app.engine.model_loader import INFERENCE_FAILED, LOAD_FAILED, ModelLoadError  # noqa: E402
+
+check("包装穿透：detail 里的原始 OOM 仍被识别（str(exc) 只有面向用户话术）",
+      watermark.is_oom_error(ModelLoadError(
+          INFERENCE_FAILED, "推理执行失败",
+          reason="模型可能在当前显存/内存下无法完成该尺寸的推理",
+          detail={"exception": "RuntimeError: ... Failed to allocate memory for requested buffer of size 4294967296"},
+      )))
+
+
+def _cause_wrapped() -> BaseException:
+    """构造一个**带 `__cause__` 链**的包装异常对象（返回它，不是抛出它）。"""
+    try:
+        raise RuntimeError("CUDA out of memory. Tried to allocate 3.00 GiB")
+    except RuntimeError as exc:
+        try:
+            raise ModelLoadError(INFERENCE_FAILED, "推理执行失败") from exc
+        except ModelLoadError as wrapped:
+            return wrapped
+
+
+check("包装穿透：异常链（__cause__）里的原始 OOM 仍被识别",
+      watermark.is_oom_error(_cause_wrapped()))
+check("包装负例：模型加载类失败不误判为 OOM",
+      not watermark.is_oom_error(ModelLoadError(
+          LOAD_FAILED, "模型加载失败", detail={"exception": "InvalidProtobuf"})),
+      "（message / reason / detail 均无资源耗尽特征）")
+
 check("降档链耗尽后 GPU → 报显存不足",
       watermark.insufficient_error_code(CUDA) == "VRAM_INSUFFICIENT")
 check("降档链耗尽后 CPU → 报物理内存不足（T0 的真瓶颈）",

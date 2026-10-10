@@ -7,7 +7,7 @@
 | 采样 | 任务**前**取基线、任务后取峰值；Windows(WDDM) 拿不到按进程显存，只能读设备级 `used` 增量 | P0 报告 §3.3 |
 | 判定 | 连续 **2 次** > **85%** → 建议降档；单次高位不触发 | §6.1 阶段 E |
 | 降档链 | `tile` 折半（至下界）→ 后端 GPU→CPU（若 CPU 已在 adopted）→ 耗尽 | §2.2 铁律 1 明列"OOM 降档链" |
-| OOM | 识别到 OOM 类异常 → 降一档 → **重试一次** | §6.1 阶段 E |
+| OOM | 识别到 OOM 类异常（**必须看穿包装层**，见 `is_oom_error`）→ 降一档 → **重试一次** | §6.1 阶段 E |
 | 口径 | `ratio = max(vram_used/total, ram_used/total)`；显存读不到时只算内存 | **T0 档瓶颈是物理内存不是显存**（§6.2） |
 
 ## 三条纪律
@@ -249,13 +249,57 @@ _OOM_PATTERNS = (
 #: Windows 提交内存耗尽（页面文件不足）→ RuntimeError 带 WinError 1455
 _WIN_OOM_RE = re.compile(r"winerror\s*1455", re.IGNORECASE)
 
+#: 展开异常链与结构化 `detail` 的最大层数（足够穿透 ModelLoadError → 原始运行时异常）。
+_CHAIN_DEPTH = 4
+
+
+def _candidate_texts(exc: BaseException) -> list[str]:
+    """收集判定 OOM 时可用的**全部**文本（**看穿包装**）。
+
+    ⚠️ 这里有一个真实事故：`model_loader` 把推理异常包装成
+    `ModelLoadError(INFERENCE_FAILED, "推理执行失败", detail={"exception": <原始错误>})`，
+    而 `ModelLoadError.__init__` 调 `super().__init__(message)` —— 于是 `str(exc)`
+    **只剩面向用户的那句话**，真正的 `Failed to allocate memory` 只存在于
+    `detail["exception"]` 与 `__cause__` 链里。
+
+    只读 `str(exc)` 的判定因此对**真实 OOM 恒为 False**：不降档、不重试，终态还报
+    `INTERNAL_ERROR`。而这条路径恰恰只在"资源真的不够"时才被走到 —— 即判定失效的
+    时机与它该起作用的时机完全重合。
+
+    故判定必须收集：异常的字符串形态 + `message` / `reason` + `detail` 里的文本 +
+    `__cause__` / `__context__` 链。
+    """
+    texts: list[str] = []
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    for _ in range(_CHAIN_DEPTH):
+        if cur is None or id(cur) in seen:
+            break
+        seen.add(id(cur))
+        texts.append(f"{type(cur).__name__}: {cur}")
+        for attr in ("message", "reason"):
+            value = getattr(cur, attr, None)
+            if isinstance(value, str) and value:
+                texts.append(value)
+        detail = getattr(cur, "detail", None)
+        if isinstance(detail, dict):
+            texts.extend(f"{k}: {v}" for k, v in detail.items() if isinstance(v, str))
+        cur = cur.__cause__ or cur.__context__
+    return texts
+
 
 def is_oom_error(exc: BaseException) -> bool:
-    """是否为"资源耗尽"类失败。**故意宽松**——多识别一点只会多一次重试，不会误判成功。"""
-    text = f"{type(exc).__name__}: {exc}".lower()
-    if _WIN_OOM_RE.search(text):
-        return True
-    return any(pat in text for pat in _OOM_PATTERNS)
+    """是否为"资源耗尽"类失败。**故意宽松**——多识别一点只会多一次重试，不会误判成功。
+
+    判定范围**不限于** `str(exc)`：见 `_candidate_texts`（包装层会吃掉原始信息）。
+    """
+    for text in _candidate_texts(exc):
+        low = text.lower()
+        if _WIN_OOM_RE.search(low):
+            return True
+        if any(pat in low for pat in _OOM_PATTERNS):
+            return True
+    return False
 
 
 def insufficient_error_code(backend: str) -> str:
