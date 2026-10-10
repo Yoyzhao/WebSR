@@ -2,13 +2,24 @@
 # WebSR · Git 忽略规则
 #
 # 目录边界（见 docs/rules/project-rules.md §2.1）：
-#   data/       = 应用数据根   → models/ 随仓库提供；其余均为运行期产物，不跟踪
-#   .workbuddy/ = 工具链数据   → 本项目按用户决定入库（项目记忆 + 基准证据）
-#   .venvs/     = 隔离推理环境 → 约 4 GB，严禁入库
+#   data/       = 应用数据根   → 全部为本地资产（模型 + 运行期数据），**不入库**
+#   .workbuddy/ = 工具链数据   → **整目录不入库**（项目进入尾声，工具链产物累计
+#                                已达 GB 级，对仓库是纯负担）。本地仍保留
+#                                （项目记忆 memory/ 与回归资产 verify/ui/ 照常维护）。
+#   .venvs/     = 隔离推理环境 → 约 7 GB，严禁入库
+#
+# 【重要】克隆本仓库后应用**开箱即用不了**，需先补齐模型：
+#   见 docs/setup/first-run-model-setup.md（或用应用内「模型库 → 下载」按需拉取，
+#   下载目录内置 10 个已实测可用的模型，含 ×1 修复类）。
 # ===========================================================================
 
 # ---- 隔离的 Python 推理环境（严禁全局安装，严禁入库）----
 .venvs/
+
+# ---- 应用本地资产（data/ 整体不入库）----
+# 模型权重（内��� ONNX + OpenVINO IR，合计约 342 MB）与运行期数据都是**本地资产**：
+# 体积大、可由下载目录重建、且与使用者的硬件/偏好相关（有的用户只用轻量模型）。
+data/
 
 # ---- Python ----
 __pycache__/
@@ -33,17 +44,12 @@ npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# ---- 应用运行期数据（data/ 下除 models/ 外均由运行时创建）----
-data/app.db
-data/app.db-shm
-data/app.db-wal
-data/uploads
-data/outputs
-data/thumbs
-data/calibration
-# 用户导入的模型（运行期产物）：`data/models/` 根下是**随应用交付的内置权重**，
-# `imported/` 子目录由用户导入动作创建，体积可达数百 MB，不入库。
-data/models/imported/
+# ---- 前端验证产物 ----
+# playwright-cli 每次运行都在工作目录生成大量页面快照（page-*.yml）与控制台日志，
+# 可随时重建。验证脚本的可复用副本归档在 scripts/test-script/。
+web/.playwright-cli/
+web/playwright-cli.json
+web/*.yaml
 
 # ---- 环境变量：生产凭证绝不入库（安全红线）----
 #   .env.example（示例）/ .env.dev（开发）可入库
@@ -66,99 +72,5 @@ desktop.ini
 .idea/
 .vscode/
 
-# ---- 开发期验证产物（可随时重建，不入库）----
-# ORM/Alembic 冒烟工程（ADR-006 附录 C）：脚本与报告入库，SQLite 库文件不入库
-.workbuddy/verify/orm-smoke/*.db
-.workbuddy/verify/orm-smoke/*.db-wal
-.workbuddy/verify/orm-smoke/*.db-shm
-
-# ---- 前端验证产物（5C 闭环验证用，非交付物）----
-# playwright-cli 每次运行都在工作目录生成大量页面快照（page-*.yml）、
-# 控制台日志与临时脚本；这些可随时重建，不入库。
-# 验证脚本的可复用副本已归档至 .workbuddy/verify/scripts/。
-web/.playwright-cli/
-web/playwright-cli.json
-# 手动执行 playwright-cli 时可能落在 web/ 根目录的散落快照
-web/*.yaml
-
-# Vite 缓存与 TS 增量构建信息
-web/node_modules/.vite/
-web/tsconfig.tsbuildinfo
-web/*.tsbuildinfo
-
-# ---- T-210 ncnn 可用性验证产物 ----
-# 模型包 45 MB（zip）/ 55 MB（解压）体积过大且可完整重建：
-# 重建步骤见 docs/tech/research/图像超分修复-T210-ncnn可用性验证结论.md §6。
-# 验证报告 JSON 与降级路径输出图（< 1 MB）仍入库，作为结论证据。
-.workbuddy/verify/t210/*.zip
-.workbuddy/verify/t210/ncnn_pkg/
-
-# ---- T-806 模型加载器验证的临时数据根 ----
-# 脚本 mkdtemp 出的一次性数据根（data_*），内含**硬链接**到 data/models/ 的模型
-# （避免为了隔离而复制 67 MB）。每次运行约 130 MB，可随时重建，不入库。
-# 注：收尾本应自行 rmtree，但环境的安全删除（trash）拦截可能使其失败而残留。
-.workbuddy/verify/t806/
-
-# ---- T-807 离线转换验证产物 ----
-# `realesr-general-x4v3.pth`（4.9 MB，SRVGGNetCompact）**入库**作为可复现的验证夹具
-# （Real-ESRGAN v0.2.5.0 官方发布，BSD-3-Clause）。
-# 大权重（67 MB RRDBNet）与全部转换产物可由夹具重跑生成，不入库；
-# 工具自检的 `*.onnx.meta.json`（< 2 KB）入库作为量化结论证据。
-.workbuddy/verify/t807/RealESRGAN_x4.pth
-.workbuddy/verify/t807/*.onnx
-
-# ---- T-702 浏览器级 UI 端到端验证产物 ----
-# `.workbuddy/verify/ui/` 是一个**可重复运行**的独立验证件：
-#   run_ui_e2e.cjs（脚本）+ fixtures/（两张夹具图，合计 < 40 KB）入库；
-#   shots/ 下的截图入库（与 .workbuddy/verify/shots/ 同一惯例），供人眼核对；
-# 唯独**运行期下载产物**不入库：结果图 ~1.3 MB、诊断 JSON 每次不同，均可一条命令重建。
-.workbuddy/verify/ui/shots/06-download-*
-.workbuddy/verify/ui/shots/10-diagnostics.json
-
-# ---- 工具链临时目录（脚本/会话的中间产物，可随时重建，不入库）----
-.workbuddy/tmp/
-
-# ---- T-703 主链路联调 · 画质与接缝验收产物 ----
-# 脚本 `scripts/test-script/verify_t703_quality.py` 与 `fixtures/README.md`（来源+许可）入库；
-# **真实照片夹具不入库**（可一条命令重建，且第三方图片许可更适合按需获取，见 README）；
-# **大幅人眼复核图不入库**（单张 1~5 MB，一条命令重建）；
-# 只保留**小体积的接缝裁剪条**（`.workbuddy/verify/t703/out/large256_seam*.png`，合计 < 1 MB）
-# 作为"无可见接缝"的人眼证据 —— 与 `regress_*.txt` 同一取舍：留高信噪比证据。
-.workbuddy/verify/t703/fixtures/*.png
-.workbuddy/verify/t703/fixtures/*.jpg
-.workbuddy/verify/t703/out/cmp_*
-.workbuddy/verify/t703/out/zoom_*
-.workbuddy/verify/t703/out/large256_full.png
-.workbuddy/verify/t703/out/large256_compare.png
-.workbuddy/verify/t703/out/beach_1to1.png
-.workbuddy/verify/t703/run.txt
-
-# ---- T-704 异常与降级链联调产物 ----
-# 可复用的验证件是 `scripts/test-script/verify_t704_degradation.py`（入库）；
-# `.workbuddy/verify/t704/probe_oom.py` 是**开发期一次性探针**（只用于探 tile 阈值与错误形态，
-# 结论已固化进主脚本）→ **不入库**，与 `_t807_tool_probe.py` 同一取舍。
-.workbuddy/verify/t704/
-
-# ---- 验证脚本的原始运行日志（可随时重跑生成，不入库）----
-# 保留了 `regress_*.txt`（跨任务全量回归摘要，高信噪比证据）。
-.workbuddy/verify/*_run.txt
-
-# ---- T-801 轻量模型 CPU 速度验证产物 ----
-# 三个源权重（各 ≤ 4.5 MB，共约 10 MB）**入库**作为可复现夹具（下载命令见结论文档 §8）：
-#   SAFMN_DF2K_x4.pth                  Apache-2.0  hf:Meloo/SAFMN   —— 官方轻量模型
-#   2xHFA2k_LUDVAE_SPAN.safetensors    CC-BY-4.0   hf:Phips/...     —— SPAN 架构（结构重参数化）
-#   4xNomosUni_span_multijpg.safetensors CC-BY-4.0 hf:Phips/...     —— T-807 自检拦截的证据
-# 派生物不入库：转换产物 `.onnx`（可由源权重一条命令重建）、OpenVINO IR、临时日志。
-.workbuddy/verify/t801/*.onnx
-.workbuddy/verify/t801/ir/
-.workbuddy/verify/t801/_*.log
-
-# ---- 内置风格模型增补（2026-10-09：动漫 + 轻量通用）----
-# 交付物本身在 `data/models/`（**入库**），此处只放构建证据。
-# 动漫权重 17.9 MB 不入库：官方 release `xinntao/Real-ESRGAN@v0.2.2.4`
-# `RealESRGAN_x4plus_anime_6B.pth`，sha256 f872d837…e99da，可用一条命令重建；
-# 转换产物 `.onnx` 与临时日志同理不入库。保留 `check_builtin_models.py`（真机复核脚本）
-# 与 `*.onnx.meta.json`（工具自检的量化数值证据，< 2 KB）。
-.workbuddy/verify/builtin_models/*.pth
-.workbuddy/verify/builtin_models/*.onnx
-.workbuddy/verify/builtin_models/_*.log
+# ---- 工具链数据（见文件头说明；本地保留，仅项目记忆与回归资产需长期维护）----
+.workbuddy/
