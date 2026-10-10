@@ -41,6 +41,13 @@ const detailTaskId = ref<string | null>(null)
 // 对比视图
 const compareTaskId = ref<string | null>(null)
 
+/**
+ * 对比模式（F-03）：并排 / 滑块 / 局部放大。
+ * 默认**滑块**（`04-状态与交互定义` §31 定稿：任务完成后中栏自动切入对比视图，默认滑块模式）。
+ * 三种模式共用同一对图片节点，切换**不重新加载图片**（同文档 §164）。
+ */
+const compareMode = ref<'side' | 'slider' | 'zoom'>('slider')
+
 const compareTask = computed(() => taskStore.tasks.find((t) => t.id === compareTaskId.value) ?? null)
 const compareVM = computed(() => (compareTask.value ? toTaskVM(compareTask.value) : null))
 
@@ -167,9 +174,19 @@ watch(
     <!-- ===== 对比视图 ===== -->
     <SectionCard v-if="compareVM" title="结果对比" :subtitle="compareVM.filename">
       <template #actions>
+        <SegmentedControl
+          v-model="compareMode"
+          :options="[
+            { label: '并排', value: 'side' },
+            { label: '滑块', value: 'slider' },
+            { label: '局部放大', value: 'zoom' },
+          ]"
+          size="sm"
+        />
         <button type="button" class="tp-close" @click="stopCompare">退出对比</button>
       </template>
       <CompareSlider
+        :mode="compareMode"
         :before-src="compareSources.before"
         :after-src="compareSources.after"
         before-label="原图"
@@ -177,7 +194,15 @@ watch(
         :initial="50"
       />
       <p class="tp-compare-note">
-        拖动手柄或用 ← → 方向键调整分割位置（Shift + 方向键可加速）。左半为原图，右半为修复结果。
+        <template v-if="compareMode === 'slider'">
+          拖动手柄或用 ← → 方向键调整分割位置（Shift + 方向键可加速）。左半为原图，右半为修复结果。
+        </template>
+        <template v-else-if="compareMode === 'side'">
+          左右并排显示原图与修复结果，便于整体观感对比。
+        </template>
+        <template v-else>
+          移动指针查看该位置的修复结果 ×4 放大（方向键可移动镜头，Shift 加速）。底图为原图。
+        </template>
       </p>
       <dl class="tp-compare-kv">
         <div><dt>源图</dt><dd class="tp-mono">{{ compareVM.sourceResolution }}</dd></div>

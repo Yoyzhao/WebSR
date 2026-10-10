@@ -257,6 +257,20 @@ def _probe_nvidia() -> list[NvidiaGpuFacts]:
     return gpus
 
 
+def read_nvidia_free_mb() -> int | None:
+    """主 NVIDIA GPU 当前空闲显存（MB）的公开读取入口，**永不抛异常**。
+
+    与阶段 A 共用同一实现（`_probe_nvidia`），避免「面板的实读」与
+    「探测的实读」来自两套口径（同 `read_system_memory_mb` 的纪律）。
+    取不到（无 N 卡 / nvidia-smi 失败）返回 None，由调用方保留缓存值。
+    """
+    try:
+        gpus = _probe_nvidia()
+    except Exception:  # noqa: BLE001 - 无驱动/查询失败一律按"取不到"处理
+        return None
+    return gpus[0].vram_free_mb if gpus else None
+
+
 def _probe_intel_gpu() -> list[IntelGpuFacts]:
     """Intel GPU 列表。**必须读 `FULL_DEVICE_NAME`**——OpenVINO 的 GPU 插件会把
     NVIDIA 卡也枚举成 `(dGPU)`，只看设备类型必然误判（设计文档 §4.1 / §11）。

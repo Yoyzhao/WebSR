@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import backend_cache
-from .device_probe import DeviceFacts, probe_device_facts
+from .device_probe import DeviceFacts, probe_device_facts, read_nvidia_free_mb, read_system_memory_mb
 from .ep_verify import (
     GPU_PROVIDERS as _GPU_PROVIDERS,
 )
@@ -172,6 +172,35 @@ def summarize_device_facts(facts: DeviceFacts) -> dict:
 # ---------------------------------------------------------------------------
 # 探针模型选择
 # ---------------------------------------------------------------------------
+
+def refresh_dynamic_memory(caps: dict) -> dict:
+    """F-06「实读」语义：刷新快照中**会随会话漂移的内存字段**。
+
+    🔴 背景（T-706 `TC-S1-050` 逮到的缺陷 4）：快照按 `data_root` 进程内缓存
+    （`get_snapshot`：避免每次请求都重跑阶段 B profile），但
+    `available_vram_gb` / `available_ram_gb` **不是静态事实**——桌面、浏览器、
+    其它进程的显存占用在会话内持续变化，快照构建时刻的值会漂出
+    PRD §2.5「面板可用显存与实际相差 <5%」的承诺（实测漂到 9.6%）。
+
+    这里**只重探这两项**（nvidia-smi 单次查询 ≈180 ms + RAM available），
+    **不动** EP 验证 / 档位 / 标定结论（它们的输入按设计取快照构建时刻状态，
+    且任务提交路径走 `get_snapshot` 缓存，不经过本函数 —— 提交 P95 不受影响）。
+    永不抛异常；取不到时保留快照值。
+    """
+    facts = caps.get("device_facts")
+    if not isinstance(facts, dict):
+        return caps
+    refreshed = dict(caps)
+    new_facts = dict(facts)
+    free = read_nvidia_free_mb()
+    if free is not None:
+        new_facts["available_vram_gb"] = round(free / 1024, 1)
+    _total, avail = read_system_memory_mb()
+    if avail is not None:
+        new_facts["available_ram_gb"] = round(avail / 1024, 1)
+    refreshed["device_facts"] = new_facts
+    return refreshed
+
 
 def pick_probe_model(models_dir: Path) -> Path | None:
     """选一个用于 EP 验证的探针模型。

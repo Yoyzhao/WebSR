@@ -214,6 +214,28 @@ class TaskManager:
                     raise AppError("MODEL_INCOMPATIBLE", reason or "模型需先转换", "请先完成离线转换后再提交", 400)
                 raise AppError("MODEL_INSUFFICIENT_VRAM", reason or "显存不足", "请选择可用模型，或降低参数后重试", 409)
 
+            # 请求倍数必须与模型倍数一致（F-02）。
+            #
+            # 推理网络只支持**固定**倍数（内置 5 个均为 ×4；导入模型按 `ModelImportDialog` 声明）。
+            # 若放任不匹配的请求进入推理，只会在**块结果拼接**处抛
+            # 「块结果尺寸不匹配：期望 W×H（tile × scale），得到 …」—— 被压成通用
+            # `INTERNAL_ERROR / 请导出诊断 JSON`，用户**根本看不出是自己选的倍数不对**。
+            # 属"能力缺口前置"（契约 §2.3 第 10 条同源）：不合法取值应在**提交时**就拒绝。
+            # `model.scale` 为空 = 未声明倍数（如部分导入模型）→ **不校验**（宁可放行也不误拒）。
+            requested_scale = params.get("scale")
+            if model.scale and isinstance(requested_scale, int) and requested_scale != model.scale:
+                raise AppError(
+                    "VALIDATION_ERROR",
+                    f"所选模型「{model.name}」的放大倍数为 ×{model.scale}，与请求的 ×{requested_scale} 不一致",
+                    f"请把放大倍数改为 ×{model.scale}，或改选支持 ×{requested_scale} 的模型",
+                    400,
+                    detail={
+                        "scale": requested_scale,
+                        "model_scale": model.scale,
+                        "model_id": model.id,
+                    },
+                )
+
             with self._lock:
                 if self._active_id is not None:
                     raise AppError(

@@ -129,7 +129,10 @@ def get_capability_snapshot() -> tuple[dict, dict]:
 def build_capabilities() -> dict:
     """契约 `Capabilities` 形状（api-contract §4.4 / 前端 `Capabilities` 类型）。"""
     caps, _ = _snapshot()
-    return caps
+    # F-06「实读」：快照的内存字段是**快照构建时刻**的值（进程内缓存），
+    # 会话内会漂移（T-706 实测漂到 9.6% > PRD §2.5 的 5%）→ 面板响应返回前刷新。
+    # 任务提交路径走 `get_capability_snapshot()`，不经过这里，P95 不受影响。
+    return caps_engine.refresh_dynamic_memory(caps)
 
 
 def warmup_capabilities() -> dict:

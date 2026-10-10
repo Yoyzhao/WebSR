@@ -41,6 +41,9 @@ data/uploads
 data/outputs
 data/thumbs
 data/calibration
+# 用户导入的模型（运行期产物）：`data/models/` 根下是**随应用交付的内置权重**，
+# `imported/` 子目录由用户导入动作创建，体积可达数百 MB，不入库。
+data/models/imported/
 
 # ---- 环境变量：生产凭证绝不入库（安全红线）----
 #   .env.example（示例）/ .env.dev（开发）可入库

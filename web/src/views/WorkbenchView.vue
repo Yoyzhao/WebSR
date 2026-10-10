@@ -12,7 +12,7 @@
  *
  * ⚠️ 不设宽度上限 —— 中栏是图像预览区，宽度直接转化为可用预览面积（05 §2.2）。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled, Setting, Tickets, Picture, RefreshLeft } from '@element-plus/icons-vue'
@@ -104,6 +104,37 @@ const modelOptions = computed(() =>
     disabled: !m.available,
   })),
 )
+
+/**
+ * 倍率选项 —— **受所选模型约束**（F-02）。
+ *
+ * 推理网络只支持**固定**倍数：内置 5 个均为 ×4（`server/app/models/builtin_catalog.py`），
+ * 导入模型用导入时声明的 `scale`。此前 ×2/×3/×4 恒可选，用户选了模型不支持的倍数后
+ * 会得到一个**无法自我解释**的「推理执行失败 / 请导出诊断 JSON」。
+ * 此处把不支持的档位置灰并写明原因（能力缺口前置到界面，与契约 §2.3 第 10 条同源）；
+ * 服务端另有同口径校验兜底（提交时拒绝，防止绕过界面直接调接口）。
+ */
+const modelScale = computed(() => selectedModel.value?.scale ?? null)
+
+const scaleOptions = computed(() => {
+  const s = modelScale.value
+  return [2, 3, 4].map((v) => ({
+    label: `×${v}`,
+    value: String(v),
+    disabled: s !== null && v !== s,
+  }))
+})
+
+const scaleHint = computed(() =>
+  modelScale.value
+    ? `该模型为 ×${modelScale.value}，其余倍率不可选`
+    : '以模型声明的倍数为准',
+)
+
+/** 模型切换后若当前倍率不再被支持，对齐到该模型的倍数（否则表单会停在一个非法值上） */
+watch(modelScale, (s) => {
+  if (s && form.value.scale !== s) form.value.scale = s
+})
 
 /** 参数面板：自动档时三项只读（引擎决定），手动档才可编辑 */
 const paramsLocked = computed(() => autoMode.value)
@@ -338,14 +369,10 @@ onMounted(async () => {
             </select>
           </SettingsRow>
 
-          <SettingsRow label="放大倍数">
+          <SettingsRow label="放大倍数" :hint="scaleHint">
             <SegmentedControl
               :model-value="String(form.scale)"
-              :options="[
-                { label: '×2', value: '2' },
-                { label: '×3', value: '3' },
-                { label: '×4', value: '4' },
-              ]"
+              :options="scaleOptions"
               size="sm"
               @update:model-value="form.scale = Number($event)"
             />
@@ -522,14 +549,10 @@ onMounted(async () => {
             </option>
           </select>
         </SettingsRow>
-        <SettingsRow label="放大倍数">
+        <SettingsRow label="放大倍数" :hint="scaleHint">
           <SegmentedControl
             :model-value="String(form.scale)"
-            :options="[
-              { label: '×2', value: '2' },
-              { label: '×3', value: '3' },
-              { label: '×4', value: '4' },
-            ]"
+            :options="scaleOptions"
             size="sm"
             @update:model-value="form.scale = Number($event)"
           />

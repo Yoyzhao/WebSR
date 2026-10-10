@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
+import shutil
 from pathlib import Path
 
 from sqlalchemy import select
@@ -55,6 +57,28 @@ def imported_dir() -> Path:
     d = models_dir() / "imported"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _move_into_place(src: Path, dest: Path) -> None:
+    """把临时文件移入模型目录（**必须能跨卷**）。
+
+    ⚠️ **不能只用 `Path.replace` / `os.replace`**：二者都建立在 `os.rename` 之上，
+    而 `os.rename` **无法跨卷**（Windows 上抛 `OSError [WinError 17]
+    系统无法将文件移到不同的磁盘驱动器`）。
+
+    上传的临时文件由路由层用 `tempfile.mkdtemp()` 落在**系统临时目录**
+    （`%TEMP%`，通常在 C:），数据目录却可能在别的盘（本项目在 E:）——
+    一旦跨卷，**整个模型导入功能就是 100% 失败**，而且会被压成
+    `INTERNAL_ERROR / 请导出诊断 JSON`，用户完全看不出原因。
+    离线转换（`conversion_service`）的产物同样经过这里，所以一并覆盖。
+
+    `shutil.move` 在同卷时等价于 rename（原子、零拷贝），跨卷时自动回退为
+    「复制 + 删除」—— 两种情形都要，故先试 `os.replace` 再回退。
+    """
+    try:
+        os.replace(src, dest)  # 同卷：原子重命名
+    except OSError:
+        shutil.move(str(src), str(dest))  # 跨卷：复制后删除源
 
 
 def _abs(rel_path: str) -> Path:
@@ -315,11 +339,11 @@ def save_import(
             companion_dest = dest_dir / f"{Path(companion_dest.stem).stem}_{n}{companion_dest.suffix}"
             n += 1
 
-    primary_tmp.replace(dest)
+    _move_into_place(primary_tmp, dest)
     rel = dest.relative_to(models_dir()).as_posix()
     companion_rel = None
     if companion_tmp is not None and companion_dest is not None:
-        companion_tmp.replace(companion_dest)
+        _move_into_place(companion_tmp, companion_dest)
         companion_rel = companion_dest.relative_to(models_dir()).as_posix()
 
     model = Model(

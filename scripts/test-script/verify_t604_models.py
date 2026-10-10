@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -187,6 +188,45 @@ with TestClient(app) as client:
     names = [m["name"] for m in client.get("/api/models").json()]
     check("删除后列表不再包含", "MySR_x4" not in names)
     check("删除登记不删磁盘文件", (MODELS / "imported" / "MySR_x4.onnx").is_file())
+
+    print("== 6b. 落盘必须能跨卷（真实上传的临时文件在系统盘）==")
+    # 🔴 为什么必须单独测这一条：
+    #   上传的临时文件由路由层 `tempfile.mkdtemp()` 落在**系统临时目录**（通常在 C:），
+    #   而数据目录可能在另一个盘（本项目在 E:）。`os.replace` / `Path.replace`
+    #   都建立在 `os.rename` 之上，**无法跨卷**（WinError 17）→ **整个导入功能 100% 失败**，
+    #   且被压成 `INTERNAL_ERROR / 请导出诊断 JSON`。
+    # ⚠️ 本脚本第 2 节的导入用例**永远命中不了**这条路径：它把 `APP_DATA_DIR` 也放在
+    #   系统临时目录（同卷）—— 缺陷正是被这个隔离策略掩盖的。
+    #   故此处显式构造「系统临时目录 → 项目盘」的移动。
+    from app.services import model_registry as _reg
+
+    sys_tmp = Path(tempfile.gettempdir())
+    xvol_dst = ROOT / ".workbuddy" / "verify" / "t604" / "crossvol"
+    xvol_dst.mkdir(parents=True, exist_ok=True)
+    src_dir = Path(tempfile.mkdtemp(prefix="websr_xvol_"))
+    src = src_dir / "cross.onnx"
+    dst = xvol_dst / "cross.onnx"
+    src.write_bytes(b"cross-volume-payload")
+    if dst.exists():
+        dst.unlink()
+    cross = sys_tmp.drive.lower() != ROOT.drive.lower()
+    print(f"  · 系统临时目录={sys_tmp.drive} 项目盘={ROOT.drive} → "
+          f"{'跨卷' if cross else '同卷（本机构造不出跨卷，本条不覆盖 EXDEV 路径）'}")
+    try:
+        _reg._move_into_place(src, dst)
+        check("落盘助手在同卷/跨卷两种情形下均能完成移动",
+              dst.is_file() and dst.read_bytes() == b"cross-volume-payload" and not src.exists(),
+              f"{sys_tmp.drive} → {ROOT.drive}")
+    except Exception as exc:  # noqa: BLE001 - 跨卷失败必须报出来，不能静默
+        check("落盘助手在同卷/跨卷两种情形下均能完成移动", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        shutil.rmtree(src_dir, ignore_errors=True)
+        if dst.exists():
+            dst.unlink()
+        try:
+            xvol_dst.rmdir()
+        except OSError:
+            pass
 
     print("== 7. 筛选 ==")
     r = client.get("/api/models", params={"format": "onnx"})
