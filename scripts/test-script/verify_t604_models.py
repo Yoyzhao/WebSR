@@ -90,7 +90,20 @@ with TestClient(app) as client:
     check("architecture 来自 catalog", x4.get("architecture") == "RRDBNet")
     ir = by_name.get("RealESRGAN_x4 (OpenVINO IR)", {})
     check("IR companion 为 ['.xml', '.bin']", ir.get("companion") == [".xml", ".bin"])
-    check("IR status=ready 且可用", ir.get("status") == "ready" and ir.get("available") is True)
+    # ⚠️ 可用性必须反映**本机能否跑**，而不是只看登记态：
+    #    IR 需要 `openvino` 运行时，未装则必须置灰并给出安装指引
+    #    （T-703 联调修复：此前只看 status/显存，缺运行时的模型仍被判"可用"）。
+    import importlib.util as _ilu
+
+    _ov = _ilu.find_spec("openvino") is not None
+    check("IR status=ready", ir.get("status") == "ready")
+    check("IR 可用性与本机 openvino 运行时一致",
+          ir.get("available") is _ov,
+          f"available={ir.get('available')} · openvino={'已装' if _ov else '未装'}")
+    if not _ov:
+        check("IR 置灰原因给出安装指引（含 openvino）",
+              "openvino" in (ir.get("unavailable_reason") or ""),
+              str(ir.get("unavailable_reason"))[:90])
     x4_id = x4.get("id")
 
     print("== 2. 导入 .onnx ==")

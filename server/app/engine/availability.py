@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from . import runtimes
+
 logger = logging.getLogger("websr.engine.availability")
 
 
@@ -63,12 +65,28 @@ def gate_availability(
     status: str,
     min_vram_mb: int | None,
     snapshot: HardwareSnapshot,
+    fmt: str | None = None,
 ) -> tuple[bool, str | None]:
-    """(available, unavailable_reason)。判定顺序固定，文案与前端展示口径一致。"""
+    """(available, unavailable_reason)。判定顺序固定，文案与前端展示口径一致。
+
+    T-703 联调补充**运行时维度**：格式所需的可选运行时（openvino / ncnn）未安装时，
+    这台机器**永远跑不了**该模型——这是**确定性事实**（不是"探测不到"），
+    因此必须门控。契约 §2.3 第 10 条本来就要求能力缺口"**前置到列表页**，
+    不该等到提交才报"；运行时可缺性同理。
+
+    实测背景：内置的 `RealESRGAN_x4 (OpenVINO IR)` 在未装 openvino 的环境里
+    曾被判为「可用」，用户选中后必然失败（详见 T-703）。
+    """
     if status == "needs_convert":
         return False, "该模型需先离线转换为 .onnx 后使用"
     if status == "invalid":
         return False, "模型文件校验未通过，请重新导入"
+    if fmt is not None:
+        st = runtimes.status_for_format(fmt)
+        # 只门控"该格式需要运行时、而本机没装"这一确定性情形；
+        # `st.module is None` 表示"本应用不加载该格式"，已由上面的 `status` 分支覆盖。
+        if not st.available and st.module is not None:
+            return False, st.reason
     if min_vram_mb and snapshot.available_vram_mb is not None:
         if min_vram_mb > snapshot.available_vram_mb:
             need = min_vram_mb / 1024

@@ -27,6 +27,13 @@ from ..db import get_session
 from ..engine import watermark
 from ..engine.availability import gate_availability, probe_hardware_snapshot
 from ..engine.ep_verify import GPU_PROVIDERS
+from ..engine.model_loader import (
+    COMPANION_MISSING,
+    FILE_MISSING,
+    NEEDS_CONVERT,
+    RUNTIME_MISSING,
+    ModelLoadError,
+)
 from ..engine.runtime_profile import RuntimeProfile, reprofile
 from ..models.entities import Artifact, Model, Task
 from ..schemas.task import ArtifactOut, ProgressOut, TaskOut
@@ -40,6 +47,13 @@ logger = logging.getLogger("websr.tasks.manager")
 ID_PREFIX = "tsk_"
 TERMINAL_STATUSES = ("completed", "canceled", "failed", "interrupted")
 SUPPORTED_TYPES = ("upscale",)  # batch/face/video 为预留类型，随对应功能开放
+
+#: 契约 §2.3 第 8 条：这四类"制品/后端不兼容"在任务终态统一表达为 `MODEL_INCOMPATIBLE`，
+#: 具体原因（含"怎么装"）放 `detail.code` / `suggestion`。
+MODEL_INCOMPATIBLE = "MODEL_INCOMPATIBLE"
+MODEL_INCOMPATIBLE_CODES = frozenset({
+    NEEDS_CONVERT, FILE_MISSING, COMPANION_MISSING, RUNTIME_MISSING,
+})
 
 THROTTLE_SECONDS = 1.0
 
@@ -450,12 +464,32 @@ class TaskManager:
                 },
             }
         else:
-            t.error = {
-                "code": "INTERNAL_ERROR",
-                "message": "推理执行失败",
-                "suggestion": "请导出诊断 JSON 并查看日志定位原因",
-                "detail": {"exception": str(exc) if exc is not None else "未知异常"},
-            }
+            # ---- 模型加载类失败：`ModelLoadError` **自带**机器可判的 `code` 与面向用户的
+            #      `reason`（含"怎么装"），**不得**压成通用内部错误。
+            #      契约 §2.3 第 8 条明确规定：`needs_convert` / `file_missing` /
+            #      `companion_missing` / `runtime_missing` 四类要出现在
+            #      `MODEL_INCOMPATIBLE` 的 `detail.code` 里。
+            #      （T-703 联调实测：未装 openvino 时，内置 IR 模型只报
+            #       "推理执行失败 / 请导出诊断 JSON"，真正的原因与安装指引全被丢掉 ——
+            #        这正是「"未安装"是状态不是异常」这条设计被最后一跳抹平的地方。）
+            if isinstance(exc, ModelLoadError):
+                detail = dict(exc.detail or {})
+                detail["code"] = exc.code
+                detail.setdefault("exception", f"{type(exc).__name__}: {exc}")
+                t.error = {
+                    "code": (MODEL_INCOMPATIBLE if exc.code in MODEL_INCOMPATIBLE_CODES
+                             else "INTERNAL_ERROR"),
+                    "message": exc.message,
+                    "suggestion": exc.reason or "请导出诊断 JSON 并查看日志定位原因",
+                    "detail": detail,
+                }
+            else:
+                t.error = {
+                    "code": "INTERNAL_ERROR",
+                    "message": "推理执行失败",
+                    "suggestion": "请导出诊断 JSON 并查看日志定位原因",
+                    "detail": {"exception": str(exc) if exc is not None else "未知异常"},
+                }
         t.status = "failed"
         t.finished_at = _utcnow()
         s.commit()

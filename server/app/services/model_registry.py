@@ -125,7 +125,7 @@ def serialize_model(m: Model, snapshot: HardwareSnapshot) -> ModelOut:
         companion = [Path(m.path).suffix.lower(), Path(m.companion_path).suffix.lower()]
 
     available, reason = gate_availability(
-        status=m.status, min_vram_mb=m.min_vram_mb, snapshot=snapshot
+        status=m.status, min_vram_mb=m.min_vram_mb, snapshot=snapshot, fmt=m.format
     )
 
     # 局部 import：conversion_service 反向依赖本模块，模块级 import 会成环

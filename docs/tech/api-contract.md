@@ -235,10 +235,17 @@
 - DB `companion_path`（单一相对路径）→ API `companion`（**扩展名数组**，形如 `[".xml", ".bin"]`）。
 - `size_bytes` 不落库，响应时由文件 `stat` 合成。
 - **`status` 是"登记态"**（`models/entities.py::MODEL_STATUSES`）：`ready` | `needs_convert` | `invalid`。
-  与 `available`（按档位算的可用性）**正交**：前者说"这份制品能不能加载"，后者说"这台机器能不能跑"。
+  与 `available`（"**这台机器此刻能不能跑**这份模型"的**综合判定**）**正交**：前者说"这份制品能不能加载"，后者说"这台机器能不能跑"。
   ⚠️ **加载期失败码**（`file_missing` / `companion_missing` / `runtime_missing`）**不是** `status` 取值——
   它们是**加载时的判定结果**，出现在 `MODEL_INCOMPATIBLE` 的 `detail.code` 里（§2.3 第 8 条）。
   前端渲染 `status` 时对未知值显示原值 + 中性色，不抛错。
+
+- **`available` 的判定顺序**（`engine/availability.py::gate_availability`，唯一计算点；T-703 澄清）：
+  ① 登记态（`needs_convert` / `invalid` → 置灰）→ ② **运行时**（该格式所需的运行时，如 `openvino` / `ncnn`，
+  未安装 → 置灰）→ ③ 显存门槛（`min_vram_mb` vs **实读**可用显存）。
+  三者任一不满足即 `available=false`，原因文案写入 `unavailable_reason`（**可照做**：含安装命令/所需显存）。
+  ①与②是**确定性事实**，必须门控；③在**探测不到**显存时不门控（宁可可用，也不误灰）。
+  依据 §2.3 第 10 条"能力缺口**前置到列表页**，不该等到提交才报"——运行时可缺性同理。
 
 ### 3.3 Artifact / LogEntry / 其它
 
@@ -583,6 +590,7 @@ data: {}
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-10 | **v1.0.1（澄清，不改变字段集）** | `T-703` 联调澄清 **`ModelOut.available` 的判定顺序**（§3.2）：原表述"按当前档位算的可用性"易被读成"只看显存"，实际语义是"**这台机器此刻能不能跑**"。现明确为 ①登记态 → ②**运行时** → ③显存门槛 三级，任一不满足即置灰且原因写入 `unavailable_reason`。**无字段增删、无错误码变更**；同时**实现侧对齐**：任务终态对模型加载类失败改用契约 §2.3 第 8 条既有的 `MODEL_INCOMPATIBLE` + `detail.code`（原实现误给 `INTERNAL_ERROR`，属**实现偏差修复**而非契约变更） |
 | 2026-10-10 | **v1.0（冻结）** | `T-700` 全量冻结：8 冻结点全部闭合。① **`status` 取值修正**（`done` → `completed`，删除不存在的 `pending`）；② **分页裁决**（v1 不引入分页信封，裸数组）；③ **错误码 16 → 20**；④ **SSE 定值**（心跳 15 s / 不发 `retry:` / 不支持 `Last-Event-ID`）；⑤ **`resolved` 分层定稿**（决策事实 + `execution` 执行事实）；⑥ **`ModelOut` 补 `architecture`/`description`/`status`/`conversion`**；⑦ **`Artifact.kind` 取超集**；⑧ **新增日志端点** `GET /api/tasks/{id}/logs`（定义并实现）；⑨ **前端类型方案定案**（手写 + 一致性校验脚本）；⑩ **新增 §8 `reasons` 文案规范** |
 | 2026-10-09 | 草案 | T-807 / T-805 / T-806 / T-804 实施差异登记（各项 `resolved` / 端点响应补全），均留待 T-700 裁决 |
 | 2026-10-08 | 草案 | `T-405` 拆分：契约最终冻结时点移至步骤 6 之前（`T-700`）；本文件标注"草案" |

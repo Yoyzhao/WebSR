@@ -115,6 +115,21 @@ web/*.tsbuildinfo
 # ---- 工具链临时目录（脚本/会话的中间产物，可随时重建，不入库）----
 .workbuddy/tmp/
 
+# ---- T-703 主链路联调 · 画质与接缝验收产物 ----
+# 脚本 `scripts/test-script/verify_t703_quality.py` 与 `fixtures/README.md`（来源+许可）入库；
+# **真实照片夹具不入库**（可一条命令重建，且第三方图片许可更适合按需获取，见 README）；
+# **大幅人眼复核图不入库**（单张 1~5 MB，一条命令重建）；
+# 只保留**小体积的接缝裁剪条**（`.workbuddy/verify/t703/out/large256_seam*.png`，合计 < 1 MB）
+# 作为"无可见接缝"的人眼证据 —— 与 `regress_*.txt` 同一取舍：留高信噪比证据。
+.workbuddy/verify/t703/fixtures/*.png
+.workbuddy/verify/t703/fixtures/*.jpg
+.workbuddy/verify/t703/out/cmp_*
+.workbuddy/verify/t703/out/zoom_*
+.workbuddy/verify/t703/out/large256_full.png
+.workbuddy/verify/t703/out/large256_compare.png
+.workbuddy/verify/t703/out/beach_1to1.png
+.workbuddy/verify/t703/run.txt
+
 # ---- 验证脚本的原始运行日志（可随时重跑生成，不入库）----
 # 保留了 `regress_*.txt`（跨任务全量回归摘要，高信噪比证据）。
 .workbuddy/verify/*_run.txt
