@@ -58,7 +58,8 @@ const actions = computed<ActionItem[]>(() => {
   const list: ActionItem[] = []
   if (v.isRunning) list.push({ key: 'cancel', label: '取消任务' })
   if (v.isFailed || v.isInterrupted || v.status === 'canceled') {
-    list.push({ key: 'retry', label: '重试', type: 'primary' })
+    // 重试属 S2；契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并标注
+    list.push({ key: 'retry', label: '重试', disabled: true, disabledReason: '重试属 S2 阶段，尚未实现' })
   }
   list.push({
     key: 'compare',
@@ -72,7 +73,14 @@ const actions = computed<ActionItem[]>(() => {
     disabled: !v.hasOutput,
     disabledReason: '暂无产出文件',
   })
-  list.push({ key: 'remove', label: '删除任务', type: 'danger' })
+  // 删除属 F-12（S2）；契约 v1.0 无 DELETE /api/tasks/{id} —— 入口禁用并标注
+  list.push({
+    key: 'remove',
+    label: '删除任务',
+    type: 'danger',
+    disabled: true,
+    disabledReason: '任务删除属 F-12（S2 阶段），尚未实现',
+  })
   return list
 })
 
@@ -143,7 +151,7 @@ function onAction(key: string) {
         <div class="td-alert-body">
           <p class="td-alert-msg">{{ vm.errorMessage || '任务已被中断' }}</p>
           <p class="td-alert-sug">
-            {{ vm.errorSuggestion || '应用重启或进程退出导致中断，可点击重试重新执行' }}
+            {{ vm.errorSuggestion || '应用重启或进程退出导致中断；重试能力属 S2 阶段，暂不可用' }}
           </p>
         </div>
       </section>

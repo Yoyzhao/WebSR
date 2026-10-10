@@ -3,11 +3,14 @@
  *
  * 状态提升的理由：任务列表在两个页面同时可见，且 SSE 进度需要单一订阅源
  * （若各页面自行订阅，切换页面会产生重复连接）。见 6-frontend-rules.md「状态管理降级原则」。
+ *
+ * 步骤 6（T-701）：进度订阅已由模拟器切换为**真实 `EventSource`**（`api/sse.ts`），
+ * 本文件对页面暴露的接口保持稳定 —— 页面代码无需知道进度从哪来。
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { cancelTask, createTask, fetchTasks, retryTask, updateTask } from '@/api/client'
-import { subscribeTaskProgress } from '@/api/mock/sse'
+import { cancelTask, createTask, fetchTask, fetchTasks } from '@/api/client'
+import { subscribeTaskProgress } from '@/api/sse'
 import type { SseProgressEvent, Task, TaskParams } from '@/types/api'
 
 export const useTaskStore = defineStore('tasks', () => {
@@ -42,7 +45,7 @@ export const useTaskStore = defineStore('tasks', () => {
   /** 对单个任务建立进度订阅（幂等：已订阅则不重复建立） */
   function subscribe(task: Task): void {
     if (subscriptions.has(task.id)) return
-    const unsubscribe = subscribeTaskProgress(task.id, task, {
+    const unsubscribe = subscribeTaskProgress(task.id, {
       onSnapshot: (snapshot) => patch(snapshot),
       onProgress: (event: SseProgressEvent) => applyProgress(event),
       onDone: (done) => {
@@ -57,6 +60,7 @@ export const useTaskStore = defineStore('tasks', () => {
   function patch(next: Task): void {
     const idx = tasks.value.findIndex((t) => t.id === next.id)
     if (idx >= 0) tasks.value[idx] = { ...tasks.value[idx], ...next }
+    else tasks.value = [next, ...tasks.value]
   }
 
   function applyProgress(event: SseProgressEvent): void {
@@ -80,14 +84,14 @@ export const useTaskStore = defineStore('tasks', () => {
     subscriptions.clear()
   }
 
-  async function submit(
-    fileId: string,
-    filename: string,
-    params: TaskParams,
-    source: { width: number; height: number },
-    modelName?: string,
-  ): Promise<Task> {
-    const task = await createTask(fileId, filename, params, source, modelName)
+  /**
+   * 提交任务。
+   *
+   * 提交后立即建立 SSE 订阅 —— 服务端「提交即返回、推理异步进行」，
+   * 若等到下一次列表刷新才订阅，会漏掉前几帧进度。
+   */
+  async function submit(fileId: string, params: TaskParams): Promise<Task> {
+    const task = await createTask(fileId, params)
     tasks.value = [task, ...tasks.value]
     activeTaskId.value = task.id
     subscribe(task)
@@ -101,27 +105,17 @@ export const useTaskStore = defineStore('tasks', () => {
     subscriptions.delete(id)
   }
 
-  async function retry(id: string): Promise<void> {
-    const next = await retryTask(id)
-    patch(next)
-    subscribe(next)
-  }
-
-  /** 用于"清理已完成" */
-  async function removeByIds(ids: string[]): Promise<void> {
-    const { removeTasks } = await import('@/api/client')
-    await removeTasks(ids)
-    ids.forEach((id) => {
-      subscriptions.get(id)?.()
-      subscriptions.delete(id)
-    })
-    tasks.value = tasks.value.filter((t) => !ids.includes(t.id))
-  }
-
-  async function clearFinished(): Promise<number> {
-    const finished = tasks.value.filter((t) => t.status === 'completed' || t.status === 'canceled' || t.status === 'interrupted')
-    await removeByIds(finished.map((t) => t.id))
-    return finished.length
+  /** 主动重新拉取单个任务（详情抽屉打开时兜底同步一次） */
+  async function refresh(id: string): Promise<void> {
+    try {
+      const fresh = await fetchTask(id)
+      patch(fresh)
+      if (fresh.status === 'running' || fresh.status === 'queued' || fresh.status === 'canceling') {
+        subscribe(fresh)
+      }
+    } catch {
+      // 刷新失败不打断界面：SSE 或下次列表加载会兜底
+    }
   }
 
   return {
@@ -134,11 +128,8 @@ export const useTaskStore = defineStore('tasks', () => {
     load,
     submit,
     cancel,
-    retry,
-    clearFinished,
-    removeByIds,
+    refresh,
     patch,
-    updateTask,
     unsubscribeAll,
   }
 })

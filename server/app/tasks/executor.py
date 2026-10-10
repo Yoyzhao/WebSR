@@ -162,7 +162,8 @@ class EngineExecutor:
         if ctx.should_cancel():
             raise TaskCancelled()
 
-        ctx.report_progress(0, 1, "preprocessing", f"正在加载模型（{model.format}）")
+        # 模型加载同属「非分块阶段」→ 块计数上报 (0, 0)（无块语义），避免污染 percent
+        ctx.report_progress(0, 0, "preprocessing", f"正在加载模型（{model.format}）")
         backend = model_loader.load_backend(spec)
 
         try:

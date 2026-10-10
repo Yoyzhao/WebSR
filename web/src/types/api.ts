@@ -164,8 +164,9 @@ export interface Task {
   file_id: string
   filename: string
   /**
-   * 源图缩略图 URL —— 前端为列表渲染附加，服务端可能不返回。
-   * 由 `/api/files/{file_id}/thumb` 派生，缺失时列表回退为占位图标。
+   * 源图缩略图 URL —— 前端为列表渲染**派生**，服务端不返回（api-contract §3.1）。
+   * 由 `GET /api/files/{file_id}/content?variant=thumb` 派生（见 `client.ts::normalizeTask`），
+   * 缺失时列表回退为占位图标。
    */
   source_thumb?: string
   source_width: number

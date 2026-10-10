@@ -25,7 +25,7 @@ import TaskDetailDrawer from '@/components/TaskDetailDrawer.vue'
 import ActionButtons from '@/components/ActionButtons.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useTaskStore } from '@/stores/tasks'
-import { triggerDownload } from '@/api/client'
+import { downloadFile, fileContentUrl } from '@/api/client'
 import { PAGE_MAX_WIDTH } from '@/constants'
 import { toTaskVM, type TaskVM } from '@/utils/viewModel'
 import type { Task } from '@/types/api'
@@ -45,44 +45,19 @@ const compareTask = computed(() => taskStore.tasks.find((t) => t.id === compareT
 const compareVM = computed(() => (compareTask.value ? toTaskVM(compareTask.value) : null))
 
 /**
- * Mock 阶段的对比图源。
- * 用内联 SVG data URI 生成一对「低清 vs 修复」示意图像 —— 目的是让滑块的
- * 裁切、拖拽、键盘交互真实可验证，而不是用两张纯色块糊弄。
- * 步骤 6 接入后端后，改为 `output` 产出的真实文件 URL。
+ * 对比图源 —— **真实文件**（步骤 6 · T-701 已接入后端）。
+ *
+ * 左半 = 该任务上传的原图（`variant=original`），右半 = 最近一次成功任务的产出
+ * （`variant=result`）。二者都由后端按 `file_id` 提供，不再使用示意图源。
  */
-function mockCompareSvg(kind: 'before' | 'after'): string {
-  const blur = kind === 'before' ? '<filter id="b"><feGaussianBlur stdDeviation="2.2"/></filter>' : ''
-  const filterAttr = kind === 'before' ? ' filter="url(#b)"' : ''
-  const gridOpacity = kind === 'before' ? '0.10' : '0.22'
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
-<defs>
-${blur}
-<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-<stop offset="0%" stop-color="#1b3a5c"/><stop offset="55%" stop-color="#3d6f9e"/><stop offset="100%" stop-color="#c9a26b"/>
-</linearGradient>
-</defs>
-<rect width="1280" height="800" fill="url(#sky)"/>
-<circle cx="960" cy="250" r="70" fill="#f6d9a0" opacity="0.9"/>
-<g${filterAttr}>
-<path d="M0 620 L260 430 L430 560 L640 360 L880 600 L1080 470 L1280 620 L1280 800 L0 800 Z" fill="#20313f"/>
-<path d="M0 700 L330 590 L620 690 L900 580 L1280 700 L1280 800 L0 800 Z" fill="#16232d"/>
-<rect x="140" y="470" width="120" height="180" fill="#2b3d4c" opacity="0.9"/>
-<rect x="300" y="520" width="90" height="130" fill="#243542" opacity="0.9"/>
-<rect x="1050" y="500" width="130" height="150" fill="#2b3d4c" opacity="0.9"/>
-</g>
-<g stroke="#ffffff" stroke-opacity="${gridOpacity}" stroke-width="1">
-${Array.from({ length: 7 }, (_, i) => `<line x1="${(i + 1) * 160}" y1="0" x2="${(i + 1) * 160}" y2="800"/>`).join('')}
-${Array.from({ length: 4 }, (_, i) => `<line x1="0" y1="${(i + 1) * 160}" x2="1280" y2="${(i + 1) * 160}"/>`).join('')}
-</g>
-${kind === 'after' ? '<text x="40" y="60" font-family="monospace" font-size="26" fill="#ffffff" fill-opacity="0.75">4x upscaled · detail reconstructed</text>' : '<text x="40" y="60" font-family="monospace" font-size="26" fill="#ffffff" fill-opacity="0.55">source · low resolution</text>'}
-</svg>`
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-}
-
-const compareSources = computed(() => ({
-  before: mockCompareSvg('before'),
-  after: mockCompareSvg('after'),
-}))
+const compareSources = computed(() => {
+  const fileId = compareTask.value?.file_id
+  if (!fileId) return { before: '', after: '' }
+  return {
+    before: fileContentUrl(fileId, 'original'),
+    after: fileContentUrl(fileId, 'result'),
+  }
+})
 
 const filtered = computed(() => {
   const list = taskStore.tasks
@@ -121,9 +96,13 @@ async function onAction({ key, id }: { key: string; id: string }) {
   if (key === 'download') {
     const t = taskStore.tasks.find((x) => x.id === id)
     const out = t?.artifacts?.find((a) => a.kind === 'output')
-    if (!out) return ElMessage.warning('该任务暂无产出文件')
-    triggerDownload(new Blob([`mock content of ${out.filename}`]), out.filename)
-    return ElMessage.success(`已开始下载 ${out.filename}`)
+    if (!t || !out) return ElMessage.warning('该任务暂无产出文件')
+    try {
+      await downloadFile(t.file_id, 'result', out.filename)
+      return ElMessage.success(`已开始下载 ${out.filename}`)
+    } catch (e) {
+      return ElMessage.error((e as Error).message || '下载失败')
+    }
   }
   if (key === 'cancel') {
     await ElMessageBox.confirm('取消后本次推理进度将丢失。确认取消？', '取消任务', {
@@ -135,21 +114,19 @@ async function onAction({ key, id }: { key: string; id: string }) {
     return ElMessage.info('任务已取消')
   }
   if (key === 'retry') {
-    await taskStore.retry(id)
-    return ElMessage.success('已重新提交')
+    // S2 阶段能力；后端契约 v1.0 无重试端点 —— 界面入口已禁用
+    return ElMessage.info('重试功能属 S2 阶段，尚未实现')
   }
 }
 
-async function clearFinished() {
-  const count = taskStore.tasks.filter((t) => t.status === 'completed' || t.status === 'canceled' || t.status === 'interrupted').length
-  if (!count) return ElMessage.info('没有可清理的已完成任务')
-  await ElMessageBox.confirm(`将删除 ${count} 条已完成 / 已取消 / 已中断的任务记录（不影响产出文件）。确认清理？`, '清理已完成', {
-    confirmButtonText: '确认清理',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
-  const n = await taskStore.clearFinished()
-  ElMessage.success(`已清理 ${n} 条记录`)
+function clearFinished() {
+  // 任务删除 / 清理属 F-12（S2）；后端契约 v1.0 无 DELETE /api/tasks —— 入口已禁用
+  ElMessage.info('任务清理属 F-12（S2 阶段），尚未实现')
+}
+
+function onRemove() {
+  // 单任务删除同属 F-12（S2）；契约 v1.0 无 DELETE /api/tasks/{id} —— 入口已禁用
+  ElMessage.info('任务删除属 F-12（S2 阶段），尚未实现')
 }
 
 onMounted(async () => {
@@ -170,9 +147,10 @@ watch(
   <div class="tasks-page" :style="{ maxWidth: PAGE_MAX_WIDTH.tasks + 'px' }">
     <PageHeader title="任务中心" subtitle="全部超分修复任务的执行记录与产出">
       <template #actions>
+        <!-- 清理任务属 F-12（S2）；契约 v1.0 无 DELETE /api/tasks —— 入口禁用并标注 -->
         <ActionButtons
           :actions="[
-            { key: 'clear', label: '清理已完成', disabled: !hasAny },
+            { key: 'clear', label: '清理已完成', disabled: true, disabledReason: '任务清理属 F-12（S2 阶段），尚未实现' },
           ]"
           size="sm"
           @action="clearFinished"
@@ -194,10 +172,6 @@ watch(
       />
       <p class="tp-compare-note">
         拖动手柄或用 ← → 方向键调整分割位置（Shift + 方向键可加速）。左半为原图，右半为修复结果。
-        <br />
-        <span class="tp-compare-mock">
-          注：当前为 Mock 阶段的示意图源，用于验证滑块交互与裁切行为；步骤 6 接入后端后替换为真实产出文件。
-        </span>
       </p>
       <dl class="tp-compare-kv">
         <div><dt>源图</dt><dd class="tp-mono">{{ compareVM.sourceResolution }}</dd></div>
@@ -315,7 +289,10 @@ watch(
                       { key: 'compare', label: '对比', disabled: !vm.isDone, disabledReason: '任务完成后才能对比' },
                       { key: 'download', label: '下载', disabled: !vm.hasOutput, disabledReason: '暂无产出文件' },
                       vm.isRunning ? { key: 'cancel', label: '取消' } : null,
-                      vm.isFailed || vm.isInterrupted || vm.status === 'canceled' ? { key: 'retry', label: '重试' } : null,
+                      // 重试属 S2；契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并标注
+                      vm.isFailed || vm.isInterrupted || vm.status === 'canceled'
+                        ? { key: 'retry', label: '重试', disabled: true, disabledReason: '重试属 S2 阶段，尚未实现' }
+                        : null,
                     ].filter(Boolean) as any
                   "
                   size="sm"
@@ -335,7 +312,7 @@ watch(
       @cancel="(id: string) => onAction({ key: 'cancel', id })"
       @retry="(id: string) => onAction({ key: 'retry', id })"
       @download="(id: string) => onAction({ key: 'download', id })"
-      @remove="(id: string) => taskStore.removeByIds([id]).then(() => { detailOpen = false; ElMessage.success('任务已删除') })"
+      @remove="onRemove"
     />
   </div>
 </template>
@@ -375,10 +352,6 @@ watch(
   font-size: var(--font-size-12);
   line-height: 16px;
   color: var(--Theme-text-tertiary);
-}
-
-.tp-compare-mock {
-  opacity: 0.9;
 }
 
 .tp-compare-kv {

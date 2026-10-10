@@ -10,12 +10,13 @@
 
 | 项 | 值 |
 |---|---|
-| **进度** | **M0–M4 全部完成**（M1/M2/M3 已验收；M4 前端原型与交互契约已完成）｜**M5 进行中** |
-| 当前阶段 | **步骤 5C 前端实现** —— ✅ **已验收通过**（2026-10-08；`web/` 可 `npm run dev`，**18 项闭环全部走通**） |
-| 下一步 | **步骤 5D**：`server/` 后端骨架与业务 + 引擎核心 |
-| 门控 | 5D 验收通过后，**先完成 `T-700`（契约 v1.0 定稿）**才可进入真实接口联调（`T-701`） |
-| 代码目录 | `web/` ✅ 已创建（15 业务组件 / 6 视图 / Mock 驱动）｜ `server/` 待创建（步骤 5D） |
-| 契约状态 | `docs/tech/api-contract.md` 为**草案**（7 个冻结点中 3 项已定、5 项待 `T-700`）——详见该文件 §7 |
+| **进度** | **M0–M5 全部完成**（M1/M2/M3 已验收；M4 前端原型已收口；M5 步骤 5C **已验收**、5D 已判定收口）｜**M6 进行中** |
+| 当前阶段 | **M6 步骤 6（前后端整合）** —— 🔵 **进行中**；**S1 主链路已真机打通**（`T-700` 契约 v1.0 ✅ → `T-701` Mock 退场 ✅ → `T-702` 全链路 ✅） |
+| 下一步 | **`T-703`**（主链路系统联调：单图超分端到端，P0） |
+| 门控 | ✅ **已通过（2026-10-10）**：5D 收口 → `T-700`（契约 v1.0 定稿）→ 真实接口联调（`T-701`/`T-702`）**均已完成** |
+| 代码目录 | `web/` ✅（15 业务组件 / 6 视图 / **真实 API + SSE 驱动，无 Mock**）｜ `server/` ✅（FastAPI，`T-601`~`T-609` + 引擎核心 `T-802`~`T-807`） |
+| 端到端验证 | `scripts/test-script/verify_t702_e2e.py` —— 唯一覆盖**真实推理路径 + 真实 SSE + 真实产物**的脚本：直连 `:8000` **41/41**、经 Vite 代理 `:5173` **43/43**；全量后端回归 **776 项断言全绿** |
+| 契约状态 | `docs/tech/api-contract.md` = **`v1.0 · 已冻结`**（8 个冻结点全 ✅、错误码 **20** 条、新增 `/api/tasks/{task_id}/logs`）；一致性校验 `verify_t700_contract.py` **33/33** |
 
 > 里程碑、任务池与验收状态的**唯一事实源**是 [`docs/plan/project-progress.md`](docs/plan/project-progress.md)。
 
@@ -66,7 +67,7 @@ WebSR/
 ├── docs/                  # 文档（见下方「文档地图」）
 ├── tools/                 # 基准与探测脚本（开发期工具，不参与应用运行时）
 ├── web/                   # 前端（Vue 3 + Vite + TS）—— ✅ 已创建（步骤 5C）
-├── server/                # 后端（FastAPI）—— 待创建（步骤 5D）
+├── server/                # 后端（FastAPI）—— ✅ 已创建（步骤 5D：骨架 T-601~T-609 + 引擎核心 T-802~T-807）
 ├── .venvs/                # 隔离的 Python 推理环境（不进版本库）
 └── .workbuddy/            # 工具链数据：项目记忆 + 基准结果
 ```
@@ -77,7 +78,7 @@ WebSR/
 
 ## 快速开始
 
-> ⚠️ `web/` 已可运行（步骤 5C 已完成，**Mock 驱动**：`web/src/api/client.ts` 的 `USE_MOCK = true` 是唯一切换点）；`server/` 尚未创建（步骤 5D）。**下列后端命令当前不可执行**，前端命令可用。
+> ✅ `web/` 与 `server/` **均已可运行，且前端已接真实后端**（Mock 层已于 `T-701` 整体删除，**无运行期模拟回退**）。开发期由 Vite `server.proxy` 把 `/api` 转发到 `127.0.0.1:8000`，故**两个都要起**；后端沿用 `.venvs/sr-app`（须先按 [`docs/tech/dev-info.md`](docs/tech/dev-info.md) §3 准备环境）。下列命令均可执行。
 
 **前置条件**
 
@@ -108,15 +109,19 @@ npm run dev        # http://127.0.0.1:5173
 
 ## 模型资产
 
-`data/models/`（约 294 MB）随仓库提供：
+`data/models/`（约 316 MB）随仓库提供：
 
 | 文件 | 说明 |
 |---|---|
-| `RealESRGAN_x4.onnx` | 主模型（RRDBNet，16,697,987 参数，opset 17，动态 H/W） |
-| `RealESRGAN_x4_fp16.onnx` / `_fp16all.onnx` | fp16 变体（Resize 是否保持 fp32 之别） |
-| `RealESRGAN_x4_s512.onnx` | H/W 冻结为 512 的静态 shape 版 |
+| `RealESRGAN_x4.onnx` | 主模型 / 通用写实（RRDBNet，16,697,987 参数，opset 17，动态 H/W） |
+| `RealESRGAN_x4plus_anime_6B.onnx` | 动漫风格（RRDBNet 6 块，4,467,779 参数） |
+| `realesr-general-x4v3.onnx` | 轻量通用（SRVGGNetCompact，1,213,296 参数） |
+| `RealESRGAN_x4_fp16.onnx` / `_fp16all.onnx` / `_s512.onnx` | 精度与静态-shape 变体（**基准资产，刻意不登记为内置项**） |
 | `ir/` | OpenVINO IR（fp32 / fp16，`.xml` + `.bin` 成对） |
 | `inspect.json` | 模型结构检查结果 |
+
+> **产品内置登记 5 项** = 3 风格 + 2 技术变体：通用/写实 `RealESRGAN_x4`、动漫 `anime_6B`、轻量通用 `realesr-general-x4v3`，外加 `_fp16` 与 IR fp16 对。**风格由「模型」区分，参数面板刻意不设风格开关**。
+> ⚠️ 内置 5 个**全是 `scale=4`** → ×2 / ×3 倍数暂无对应权重；人脸修复（F-14）属 S3。
 
 **许可证**：Real-ESRGAN 为 **BSD-3-Clause，可商用**。
 ⚠️ **Upscayl 内置的 Remacri / Ultramix / Ultrasharp 为非商用许可，禁止打包进本仓库。**
@@ -130,11 +135,11 @@ npm run dev        # http://127.0.0.1:5173
 | 项目规则 | [`docs/rules/project-rules.md`](docs/rules/project-rules.md) | **硬性约束与领域铁律，动手前必读** |
 | 需求文档 | [`docs/prd/prd.md`](docs/prd/prd.md) | 功能边界、优先级、档位矩阵、验收标准 |
 | 技术架构 | [`docs/tech/tech-arch.md`](docs/tech/tech-arch.md) | 分层、模块边界、数据模型、API 与 SSE 规范、引擎五阶段 |
-| 架构决策 | [`docs/tech/arch/`](docs/tech/arch/) | ADR-001~005 |
+| 架构决策 | [`docs/tech/arch/`](docs/tech/arch/) | ADR-001~006 |
 | 环境信息 | [`docs/tech/dev-info.md`](docs/tech/dev-info.md) | 技术栈、版本、端口、环境变量 |
-| API 契约 | [`docs/tech/api-contract.md`](docs/tech/api-contract.md) | 端点、统一错误体（16 码）、SSE 事件定义（**草案**，`T-700` 全量定稿） |
+| API 契约 | [`docs/tech/api-contract.md`](docs/tech/api-contract.md) | 端点、统一错误体（**20 码**）、SSE 事件定义（**`v1.0 · 已冻结`**，`T-700` / 2026-10-10 定稿） |
 | 前端原型 | [`docs/prototype/`](docs/prototype/) | **设计 token 唯一来源**（`tokens.css`）+ 6 份规范文档 + 9 张页面图 |
-| 阶段任务文档 | [`docs/plan/tasks/`](docs/plan/tasks/) | 各里程碑阶段的执行细节与验证结果（M3/M4/M5） |
+| 阶段任务文档 | [`docs/plan/tasks/`](docs/plan/tasks/) | 各里程碑阶段的执行细节与验证结果（M3/M4/M5/M6） |
 | 前置调研 | [`docs/tech/research/`](docs/tech/research/) | 6 份调研与实测报告（含 P0 实测证据） |
 | 项目进度 | [`docs/plan/project-progress.md`](docs/plan/project-progress.md) | **调度状态唯一事实源** |
 

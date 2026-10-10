@@ -130,7 +130,11 @@ def run_upscale(backend: InferenceBackend, req: UpscaleRequest) -> UpscaleOutcom
 
     # ---- 1. 预处理 -----------------------------------------------------------
     _check_cancel(req)
-    _emit(req, 1, 1, "preprocessing", "正在预处理输入图像")
+    # ⚠️ 预处理**不是分块阶段**，块计数必须上报 (0, 0)（=「无块语义」）。
+    #    上报 (1, 1) 会让 percent = (0 + 1/1)/1 = 1.0 —— 进度条在预处理阶段即冲到 100%，
+    #    随后回落到 0.03（chunk 1/35），**违反契约 §5「percent 单调不减」**。
+    #    （T-702 实测发现：控制面测试注入 StubExecutor，覆盖不到真实推理路径。）
+    _emit(req, 0, 0, "preprocessing", "正在预处理输入图像")
     tensor, meta = image_ops.to_tensor(req.source_path, req.spec)
     src_h, src_w = int(tensor.shape[2]), int(tensor.shape[3])
     channels = int(tensor.shape[1])

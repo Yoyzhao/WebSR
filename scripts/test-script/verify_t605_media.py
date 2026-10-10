@@ -102,8 +102,13 @@ with TestClient(app) as client:
     r = client.get(f"/api/files/{fid}/content", params={"variant": "thumb"})
     check("thumb → 200 image/jpeg", r.status_code == 200 and r.headers.get("content-type") == "image/jpeg")
     r = client.get(f"/api/files/{fid}/content", params={"variant": "result"})
-    check("variant=result 暂不支持 → 400 VALIDATION_ERROR",
-          r.status_code == 400 and r.json()["error"]["code"] == "VALIDATION_ERROR")
+    # 契约 §4.2 明确声明支持 variant=result（= 该原图最近一次成功任务的产出）。
+    # 本用例的假文件没有成功任务，故应为 404 NOT_FOUND；「有产出时 200 + image/*」
+    # 由 T-702 全链路 E2E（.workbuddy/tmp/e2e_s1.py §7）覆盖。
+    # ⚠️ 旧断言写的是「暂不支持 → 400 VALIDATION_ERROR」，与契约不符（T-701 修正）。
+    check("variant=result 无成功任务 → 404 NOT_FOUND",
+          r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND",
+          f"actual={r.status_code}")
     r = client.get("/api/files/file_deadbeef99/content")
     check("不存在的 id → 404 NOT_FOUND",
           r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND")

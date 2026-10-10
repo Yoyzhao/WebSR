@@ -18,7 +18,7 @@ import SettingsRow from '@/components/SettingsRow.vue'
 import ActionButtons from '@/components/ActionButtons.vue'
 import SegmentedControl from '@/components/SegmentedControl.vue'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
-import { exportDiagnostics, fetchLogs, fetchSettings, saveSettings } from '@/api/client'
+import { exportDiagnostics, fetchLogs, fetchSettings, fetchTasks, saveSettings } from '@/api/client'
 import { PAGE_MAX_WIDTH, UPLOAD } from '@/constants'
 import type { LogEntry, Setting } from '@/types/api'
 
@@ -95,7 +95,12 @@ async function resetDefaults() {
 }
 
 async function openLogs() {
-  logs.value = await fetchLogs('tsk_01J8X004')
+  // 日志按任务派生（契约 §4.1 `GET /api/tasks/{id}/logs`）—— 取最近一条任务，
+  // 而不是写死一个本地假 id（写死会在真实链路上永远 404）。
+  const list = await fetchTasks()
+  const latest = list[0]
+  if (!latest) return ElMessage.info('还没有任何任务，暂无可查看的日志')
+  logs.value = await fetchLogs(latest.id)
   logsOpen.value = true
 }
 

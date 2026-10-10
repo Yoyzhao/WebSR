@@ -182,8 +182,54 @@ def read_meta(file_id: str) -> dict | None:
         return None
 
 
+#: 扩展名 → 响应 Content-Type（产物文件用；与上传白名单同源）
+_MEDIA_TYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    "webp": "image/webp", "bmp": "image/bmp", "tif": "image/tiff", "tiff": "image/tiff",
+}
+
+
+def result_path_for_file(file_id: str) -> Path | None:
+    """按**上传文件 id** 找到其最近一次成功任务（`completed`）的 `output` 产物。
+
+    为什么按 file_id 而不是 art_* / tsk_*：`variant=result` 的语义是
+    「这张原图的超分结果」——同一张原图可能被多次提交（不同模型 / 参数），
+    取**最近一次成功**的那份才符合用户预期（见 api-contract §4.2）。
+
+    ⚠️ 这里的 DB 依赖刻意**函数内导入**：`media_store` 被 `tasks/manager` 导入，
+    顶层再导入 `db` / `models.entities` 会把导入环拉进启动路径。
+    """
+    from sqlalchemy import select
+
+    from ..db import get_session
+    from ..models.entities import Artifact, Task
+
+    s = get_session()
+    try:
+        stmt = (
+            select(Task)
+            .where(Task.status == "completed")
+            .order_by(Task.created_at.desc(), Task.id.desc())
+        )
+        for t in s.scalars(stmt).all():
+            if (t.params or {}).get("file_id") != file_id:
+                continue
+            art = s.scalars(
+                select(Artifact).where(Artifact.task_id == t.id, Artifact.kind == "output")
+            ).first()
+            if art is None:
+                continue
+            # DB 里存的是相对数据根的路径（`outputs/tsk_<id>/xx.png`）
+            p = settings_store.effective_data_root() / art.path
+            if p.is_file():
+                return p
+        return None
+    finally:
+        s.close()
+
+
 def get_content(file_id: str, variant: str) -> tuple[Path, str]:
-    """返回 (路径, media_type)。variant=result 属任务产物，随 T-606/T-808 接入。"""
+    """返回 (路径, media_type)。支持 original / thumb / result。"""
     if variant == "original":
         p = find_upload(file_id)
         if p is None:
@@ -202,9 +248,20 @@ def get_content(file_id: str, variant: str) -> tuple[Path, str]:
                 img.load()
                 make_thumbnail(ImageOps.exif_transpose(img), p)
         return p, "image/jpeg"
+    if variant == "result":
+        p = result_path_for_file(file_id)
+        if p is None:
+            raise AppError(
+                "NOT_FOUND",
+                "该图片还没有成功的超分结果",
+                "请先提交一个超分任务，待任务完成后即可查看与下载结果",
+                404,
+            )
+        ext = p.suffix.lower().lstrip(".")
+        return p, _MEDIA_TYPES.get(ext, "application/octet-stream")
     raise AppError(
         "VALIDATION_ERROR",
         f"不支持的 variant: {variant}",
-        "当前支持 original / thumb；result（任务产物）随任务中心接入",
+        "当前支持 original / thumb / result",
         400,
     )

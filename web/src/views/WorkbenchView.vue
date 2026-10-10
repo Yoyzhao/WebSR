@@ -13,7 +13,7 @@
  * ⚠️ 不设宽度上限 —— 中栏是图像预览区，宽度直接转化为可用预览面积（05 §2.2）。
  */
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled, Setting, Tickets, Picture, RefreshLeft } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
@@ -28,11 +28,12 @@ import StatusText from '@/components/StatusText.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useTaskStore } from '@/stores/tasks'
 import { useSystemStore } from '@/stores/system'
-import { fetchModels, triggerDownload, uploadFile } from '@/api/client'
+import { downloadFile, fetchModels, fileContentUrl, uploadFile } from '@/api/client'
 import type { Model, TaskParams, UploadResult } from '@/types/api'
 import { UPLOAD } from '@/constants'
 import { formatBytes, formatResolution } from '@/utils/format'
 
+const route = useRoute()
 const router = useRouter()
 const { isWide, isCompact } = useBreakpoint()
 const taskStore = useTaskStore()
@@ -61,7 +62,9 @@ const tasksDrawer = ref(false)
 const autoMode = ref(true)
 const form = ref({
   scale: 4,
-  modelId: 'mdl_realesrgan_x4',
+  // ⚠️ 默认留空：真实模型 id 由 `GET /api/models` 决定（形如 `mdl_1`）。
+  //    写死一个 id 会在模型列表到达前指向不存在的模型（T-702 联调修正）。
+  modelId: '',
   tile: 512,
   precision: 'fp16' as 'fp32' | 'fp16',
   backend: 'cuda' as 'cpu' | 'cuda' | 'openvino' | 'tensorrt',
@@ -104,6 +107,17 @@ const modelOptions = computed(() =>
 
 /** 参数面板：自动档时三项只读（引擎决定），手动档才可编辑 */
 const paramsLocked = computed(() => autoMode.value)
+
+/**
+ * 预览图 URL。
+ * 刚上传的文件用本地对象 URL（零延迟、不占后端带宽）；刷新后回落到按
+ * 任务的 `file_id` 向后端取原图 —— 否则刷新即退化为占位图。
+ */
+const previewImageUrl = computed(() => {
+  if (sourcePreviewUrl.value) return sourcePreviewUrl.value
+  const t = previewTask.value
+  return t?.file_id ? fileContentUrl(t.file_id, 'original') : ''
+})
 
 // ---------------------------------------------------------------------------
 // 交互
@@ -168,13 +182,7 @@ async function submit() {
       backend: autoMode.value ? null : form.value.backend,
       auto: autoMode.value,
     }
-    const task = await taskStore.submit(
-      uploaded.value.file_id,
-      uploaded.value.filename,
-      params,
-      { width: uploaded.value.width, height: uploaded.value.height },
-      selectedModel.value.name,
-    )
+    const task = await taskStore.submit(uploaded.value.file_id, params)
     ElMessage.success('任务已提交，进度将在下方实时更新')
     resetUpload()
     if (!isWide.value) tasksDrawer.value = true
@@ -199,12 +207,17 @@ async function onTaskAction({ key, id }: { key: string; id: string }) {
   if (key === 'download') {
     const t = taskStore.tasks.find((x) => x.id === id)
     const out = t?.artifacts?.find((a) => a.kind === 'output')
-    if (!out) {
+    if (!t || !out) {
       ElMessage.warning('该任务暂无产出文件')
       return
     }
-    triggerDownload(new Blob([`mock content of ${out.filename}`]), out.filename)
-    ElMessage.success(`已开始下载 ${out.filename}`)
+    try {
+      // 真实下载：按上传文件 id 取「最近一次成功任务」的结果（api-contract §4.2 variant=result）
+      await downloadFile(t.file_id, 'result', out.filename)
+      ElMessage.success(`已开始下载 ${out.filename}`)
+    } catch (e) {
+      ElMessage.error((e as Error).message || '下载失败')
+    }
     return
   }
   if (key === 'cancel') {
@@ -218,21 +231,32 @@ async function onTaskAction({ key, id }: { key: string; id: string }) {
     return
   }
   if (key === 'retry') {
-    await taskStore.retry(id)
-    ElMessage.success('已重新提交')
+    // S2 阶段能力（PRD US-05 批量场景）；后端契约 v1.0 无重试端点 —— 界面入口已禁用
+    ElMessage.info('重试功能属 S2 阶段，尚未实现')
   }
 }
 
 function runCalibration() {
-  system.calibrate().then(() => ElMessage.success('标定任务已触发（S2 阶段实现）'))
+  system
+    .calibrate()
+    .then(() => ElMessage.success('标定已触发，可在硬件能力页查看进度与结果'))
+    .catch((e: Error) => ElMessage.error(e.message || '标定触发失败'))
 }
 
 onMounted(async () => {
   try {
     models.value = await fetchModels()
-    if (!models.value.some((m) => m.id === form.value.modelId && m.available)) {
+    // 模型库「使用此模型」→ `/` 带 `?model=<id>` 深链（ModelsView.useModel）。
+    // 必须先认这个参数，否则按钮点了等于没点（T-702 联调修正）。
+    const wanted = typeof route.query.model === 'string' ? route.query.model : ''
+    const deepLink = wanted
+      ? models.value.find((m) => m.id === wanted && m.available)
+      : undefined
+    if (deepLink) {
+      form.value.modelId = deepLink.id
+    } else if (!models.value.some((m) => m.id === form.value.modelId && m.available)) {
       const firstAvailable = models.value.find((m) => m.available)
-      if (firstAvailable) form.value.modelId = firstAvailable.id
+      form.value.modelId = firstAvailable?.id ?? ''
     }
   } finally {
     modelsLoading.value = false
@@ -391,8 +415,8 @@ onMounted(async () => {
 
               <div class="wb-preview-stage">
                 <img
-                  v-if="sourcePreviewUrl"
-                  :src="sourcePreviewUrl"
+                  v-if="previewImageUrl"
+                  :src="previewImageUrl"
                   class="wb-preview-img"
                   alt="源图预览"
                 />
@@ -562,7 +586,7 @@ onMounted(async () => {
       @cancel="(id: string) => onTaskAction({ key: 'cancel', id })"
       @retry="(id: string) => onTaskAction({ key: 'retry', id })"
       @download="(id: string) => onTaskAction({ key: 'download', id })"
-      @remove="(id: string) => taskStore.removeByIds([id]).then(() => { detailOpen = false; ElMessage.success('任务已删除') })"
+      @remove="() => ElMessage.info('任务删除 / 清理属 F-12（S2 阶段），尚未实现')"
     />
   </div>
 </template>

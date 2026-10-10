@@ -346,6 +346,19 @@ check("进度覆盖四个阶段",
 chunks = [e[0] for e in events if e[2] == "inferencing"]
 check("chunk 级进度单调不减", chunks == sorted(chunks), str(chunks))
 check("最后一块 = 总块数", bool(chunks) and chunks[-1] == res.tiles, str(chunks))
+
+# ---- T-702 回归：非分块阶段不得上报块计数 -------------------------------------
+# 缺陷（T-702 联调实测）：预处理曾上报 (1, 1)，服务端 percent 公式
+#   percent = (progress_done + current_chunk/total_chunks) / total_items
+# 在 total_items=1 时算出 1.0 → 进度条在预处理阶段即冲到 100%，随后回落到 1/35，
+# **违反契约 §5「percent 单调不减」**。控制面测试注入 StubExecutor，覆盖不到真实路径。
+pre_chunk = [(a, b) for a, b, c, _e in events if c == "preprocessing"]
+check("预处理阶段上报块计数 total=0（无块语义）【T-702 回归】",
+      bool(pre_chunk) and all(b == 0 for _a, b in pre_chunk), str(pre_chunk))
+check("预处理阶段不出现「done>=total>0」的假 100%【T-702 回归】",
+      all(not (b > 0 and a >= b) for a, b in pre_chunk), str(pre_chunk))
+chunk_events = [(a, b) for a, b, c, _e in events if c in ("inferencing", "stitching", "saving")]
+check("分块阶段才有块计数（total>0）", all(b > 0 for _a, b in chunk_events[:1]), str(chunk_events[:1]))
 check("执行事实里带后端描述", res.backend.get("kind") == "onnxruntime", str(res.backend)[:120])
 check("执行事实里带耗时", res.elapsed_ms > 0, str(res.elapsed_ms))
 

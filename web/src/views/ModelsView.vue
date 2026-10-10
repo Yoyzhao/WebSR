@@ -75,7 +75,10 @@ async function onDelete(id: string) {
 
 async function onSubmitImport(payload: ImportPayload) {
   importOpen.value = false
-  const primary = payload.files[0]
+  // 主文件 = 非 .bin 的那个（`.onnx` / `.xml` / `.param` / `.pth` / `.safetensors`）；
+  // 配套权重 = `.bin`（仅 OpenVINO IR 与 ncnn 需要，契约 §4.3 `companion_file`）。
+  const primary = payload.files.find((f) => !/\.bin$/i.test(f.name)) ?? payload.files[0]
+  const companion = payload.files.find((f) => /\.bin$/i.test(f.name)) ?? null
   await importModel({
     name: payload.name,
     format: payload.format,
@@ -83,6 +86,7 @@ async function onSubmitImport(payload: ImportPayload) {
     min_vram_mb: payload.minVramMb,
     backends: payload.backends,
     file: primary,
+    companionFile: companion,
   })
   await load()
   ElMessage.success(`模型「${payload.name}」已导入`)
