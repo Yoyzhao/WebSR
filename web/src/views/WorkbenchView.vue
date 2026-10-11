@@ -15,7 +15,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
-import { UploadFilled, Setting, Tickets, Picture, RefreshLeft } from '@element-plus/icons-vue'
+import { UploadFilled, Setting, Tickets, Picture, RefreshLeft, Download } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionCard from '@/components/SectionCard.vue'
 import SettingsRow from '@/components/SettingsRow.vue'
@@ -25,6 +25,7 @@ import TaskCard from '@/components/TaskCard.vue'
 import TaskDetailDrawer from '@/components/TaskDetailDrawer.vue'
 import ActionButtons from '@/components/ActionButtons.vue'
 import StatusText from '@/components/StatusText.vue'
+import CompareSlider from '@/components/CompareSlider.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useTaskStore } from '@/stores/tasks'
 import { useSystemStore } from '@/stores/system'
@@ -32,7 +33,7 @@ import { downloadFile, fetchModels, fileContentUrl, uploadFile } from '@/api/cli
 import type { Model, TaskParams, UploadResult } from '@/types/api'
 import { UNAVAILABLE_COPY, UPLOAD } from '@/constants'
 import { formatBytes, formatResolution } from '@/utils/format'
-import { toModelVM } from '@/utils/viewModel'
+import { toModelVM, toTaskVM } from '@/utils/viewModel'
 
 const route = useRoute()
 const router = useRouter()
@@ -90,6 +91,66 @@ const selectedModelDesc = computed(() => selectedModelVM.value?.descDetail ?? ''
 const detailTask = computed(() => taskStore.tasks.find((t) => t.id === detailTaskId.value) ?? null)
 
 const previewTask = computed(() => taskStore.previewTask)
+
+// ---------------------------------------------------------------------------
+// 中栏对比画布（F-03）—— 5A `01-页面结构与布局.md` §3.3 定稿的 CenterPanel
+// ---------------------------------------------------------------------------
+
+/**
+ * 对比模式：并排 / 滑块 / 局部放大。定稿默认**滑块**（`04-状态与交互定义` §31）。
+ *
+ * ⚠️ 2026-10-11 修复（F-03 承载页面偏离定稿）：此前中栏只有一张源图 + 一个「进入对比」
+ * 按钮，点它是 `router.push('/tasks?compare=…')` —— 与 `PRD §6.1` 关键交互第 4 条
+ * 「**对比**：结果产出后**自动切入对比视图**，默认滑块分割」以及 5A 把 `CenterPanel`
+ * 定稿为「预览工具条 + 对比画布」都不符，用户被迫多点一次跳转。现按定稿就地承载。
+ */
+const compareMode = ref<'side' | 'slider' | 'zoom'>('slider')
+
+/** 预览任务的 VM（尺寸 / 耗时 / 模型）—— 工具条与图例共用，避免各自拼字符串 */
+const previewVM = computed(() => (previewTask.value ? toTaskVM(previewTask.value) : null))
+
+/** 是否已有可用产出（完成 **且** 存在 output 产物）—— 决定中栏显示对比画布还是单张源图 */
+const previewHasResult = computed(
+  () =>
+    previewTask.value?.status === 'completed' &&
+    !!previewTask.value?.artifacts?.some((a) => a.kind === 'output'),
+)
+
+/** 对比图源：左 = 该任务上传的原图，右 = 最近一次成功任务的产出（与任务中心同一口径） */
+const previewCompareSources = computed(() => {
+  const fileId = previewTask.value?.file_id
+  if (!fileId) return { before: '', after: '' }
+  return { before: fileContentUrl(fileId, 'original'), after: fileContentUrl(fileId, 'result') }
+})
+
+/**
+ * 「结果产出后自动切入对比视图，默认滑块分割」（`PRD §6.1` 第 4 条）。
+ * 两个触发点：① 预览任务切换（follow 到另一条任务）；② 同一任务由「无产出」变为「有产出」。
+ * 二者都把模式重置为定稿默认的滑块，避免沿用上一条任务留下的模式。
+ */
+watch(
+  () => [previewTask.value?.id, previewHasResult.value] as const,
+  ([id, hasResult], prev) => {
+    if (!id) return
+    if (id !== prev?.[0] || (hasResult && !prev?.[1])) compareMode.value = 'slider'
+  },
+)
+
+/** 工具条「下载结果」—— 与任务中心同一条下载链路（`variant=result`） */
+async function downloadPreviewResult(): Promise<void> {
+  const t = previewTask.value
+  const out = t?.artifacts?.find((a) => a.kind === 'output')
+  if (!t || !out) {
+    ElMessage.warning('该任务暂无产出文件')
+    return
+  }
+  try {
+    await downloadFile(t.file_id, 'result', out.filename)
+    ElMessage.success(`已开始下载 ${out.filename}`)
+  } catch (e) {
+    ElMessage.error((e as Error).message || '下载失败')
+  }
+}
 
 const canSubmit = computed(() => !!uploaded.value && !submitting.value)
 
@@ -489,20 +550,56 @@ onMounted(async () => {
         <SectionCard class="wb-preview-card" no-padding>
           <div class="wb-preview">
             <template v-if="previewTask">
+              <!-- PreviewToolbar（01 §3.3 定稿：标题组 + CompareModeSwitch + 下载结果） -->
               <div class="wb-preview-head">
                 <div class="wb-preview-title">
                   <el-icon :size="14"><Picture /></el-icon>
                   <span :title="previewTask.filename">{{ previewTask.filename }}</span>
                 </div>
-                <StatusText
-                  :status="previewTask.status"
-                  :degraded="!!previewTask.resolved?.degraded && previewTask.status === 'completed'"
-                />
+                <span v-if="previewVM" class="wb-preview-meta wb-mono">
+                  {{ previewVM.sourceResolution }}<template v-if="previewVM.outputResolution"> → {{ previewVM.outputResolution }}</template>
+                  <template v-if="previewVM.durationText"> · {{ previewVM.durationText }}</template>
+                </span>
+                <div class="wb-preview-tools">
+                  <SegmentedControl
+                    v-if="previewHasResult"
+                    v-model="compareMode"
+                    :options="[
+                      { label: '并排', value: 'side' },
+                      { label: '滑块', value: 'slider' },
+                      { label: '局部放大', value: 'zoom' },
+                    ]"
+                    size="sm"
+                  />
+                  <button
+                    v-if="previewHasResult"
+                    type="button"
+                    class="wb-tool-btn"
+                    @click="downloadPreviewResult"
+                  >
+                    <el-icon :size="13"><Download /></el-icon>下载结果
+                  </button>
+                  <StatusText
+                    :status="previewTask.status"
+                    :degraded="!!previewTask.resolved?.degraded && previewTask.status === 'completed'"
+                  />
+                </div>
               </div>
 
-              <div class="wb-preview-stage">
+              <div class="wb-preview-stage" :class="{ 'is-compare': previewHasResult }">
+                <!-- 有产出 → 就地对比（PRD §6.1-4 自动切入，默认滑块）；否则单张源图 -->
+                <CompareSlider
+                  v-if="previewHasResult"
+                  :mode="compareMode"
+                  :before-src="previewCompareSources.before"
+                  :after-src="previewCompareSources.after"
+                  before-label="原图"
+                  after-label="修复后"
+                  :initial="50"
+                  aspect="16 / 9"
+                />
                 <img
-                  v-if="previewImageUrl"
+                  v-else-if="previewImageUrl"
                   :src="previewImageUrl"
                   class="wb-preview-img"
                   alt="源图预览"
@@ -513,6 +610,14 @@ onMounted(async () => {
                   <p class="wb-preview-ph-sub">提交本页上传的图像后将在此处显示预览</p>
                 </div>
               </div>
+
+              <!-- CompareLegend（01 §3.3：只标注尺寸与模型，不叠加浮层遮挡图像） -->
+              <dl v-if="previewHasResult && previewVM" class="wb-compare-legend">
+                <div><dt>原图</dt><dd class="wb-mono">{{ previewVM.sourceResolution }}</dd></div>
+                <div><dt>产出</dt><dd class="wb-mono">{{ previewVM.outputResolution || '—' }}</dd></div>
+                <div><dt>耗时</dt><dd class="wb-mono">{{ previewVM.durationText || '—' }}</dd></div>
+                <div><dt>模型</dt><dd>{{ previewVM.modelName }}</dd></div>
+              </dl>
 
               <div v-if="previewTask.status === 'running' || previewTask.status === 'queued' || previewTask.status === 'canceling'" class="wb-preview-prog">
                 <div class="wb-prog-bar">
@@ -525,12 +630,11 @@ onMounted(async () => {
               </div>
 
               <div class="wb-preview-actions">
+                <!-- 对比已就地承载（见下方 CompareSlider），故不再放「进入对比」跳转按钮 ——
+                     定稿 `01 §3.3` 的中栏本身就含对比画布，跳转是此前的实现折衷。 -->
                 <ActionButtons
-                  :actions="[
-                    { key: 'detail', label: '查看详情', type: 'primary' },
-                    { key: 'compare', label: '进入对比', disabled: previewTask.status !== 'completed', disabledReason: '任务完成后才能对比' },
-                  ]"
-                  @action="(k: string) => (k === 'detail' ? openDetail(previewTask!.id) : router.push({ path: '/tasks', query: { compare: previewTask!.id } }))"
+                  :actions="[{ key: 'detail', label: '查看详情', type: 'primary' }]"
+                  @action="() => openDetail(previewTask!.id)"
                 />
               </div>
             </template>
@@ -1113,11 +1217,17 @@ onMounted(async () => {
   gap: 12px;
 }
 
+/* 预览工具条（01 §3.3 定稿：高 52 = 标题组 + CompareModeSwitch + 下载结果）
+ * 水平内边距不再叠加 —— SectionCard 的 `.is-flush` body 已提供 `--Scale-space-5`，
+ * 再加 24px 会双重缩进（定稿的"padding 左右 24"指的是画布相对卡体） */
 .wb-preview-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
+  min-height: 52px;
+  flex-wrap: wrap;
+  padding-bottom: var(--Scale-space-3);
+  border-bottom: 1px solid var(--Theme-border-subtle);
 }
 
 .wb-preview-title {
@@ -1129,12 +1239,104 @@ onMounted(async () => {
   font-weight: 500;
   color: var(--Theme-text-primary);
   min-width: 0;
+  flex: 0 1 auto;
 }
 
 .wb-preview-title span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 工具条中段的尺寸/耗时（01 §3.3 写 11px mono，但字阶最小档是 12px —— 按 token 取 12，
+ * 不为了对齐设计稿的像素值新造字号；窄屏优先被挤掉，故可收缩） */
+.wb-preview-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-12);
+  line-height: 16px;
+  color: var(--Theme-text-tertiary);
+}
+
+/* 工具条右侧：模式切换 + 下载结果 + 状态（窄屏换行到第二行，不横向滚动 —— 05 §4.1） */
+.wb-preview-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.wb-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  appearance: none;
+  border: 1px solid var(--Theme-border-subtle);
+  background: transparent;
+  color: var(--Theme-text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-13);
+  line-height: 18px;
+  padding: 3px 10px;
+  border-radius: var(--Scale-radius-button);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.wb-tool-btn:hover {
+  background: var(--Theme-bg-hover);
+  color: var(--Theme-text-primary);
+}
+
+.wb-tool-btn:focus-visible {
+  outline: 2px solid var(--Theme-primary);
+  outline-offset: 1px;
+}
+
+/* 对比图例（01 §3.3：标注实际像素尺寸与所用模型；**放画布下方不叠浮层** —— PRD §6.4） */
+.wb-compare-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  font-size: var(--font-size-12);
+  line-height: 16px;
+}
+
+.wb-compare-legend > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.wb-compare-legend dt {
+  color: var(--Theme-text-tertiary);
+}
+
+.wb-compare-legend dd {
+  margin: 0;
+  color: var(--Theme-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 对比模式下 stage 不再自绘边框/底色 —— `CompareSlider` 自带描边与圆角，
+ * 叠加会出双框；单图态仍需 stage 提供取景框。 */
+.wb-preview-stage.is-compare {
+  border: 0;
+  background: transparent;
+  min-height: 0;
+  border-radius: 0;
 }
 
 .wb-preview-stage {
