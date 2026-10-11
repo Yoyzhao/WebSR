@@ -47,18 +47,18 @@ defineProps<{
 
 .settings-row__label {
   flex: 0 0 auto;
-  font-size: var(--font-size-13);
+  font-size: var(--font-size-14);
   color: var(--Theme-text-secondary);
   line-height: var(--line-height-body);
 }
 
 .settings-row__sim {
   margin-left: var(--Scale-space-2);
-  padding: 1px 6px;
+  padding: 1px 7px;
   border-radius: var(--Scale-radius-pill);
   background: color-mix(in srgb, var(--Theme-warning) 18%, transparent);
   color: var(--Theme-warning);
-  font-size: var(--font-size-11);
+  font-size: var(--font-size-12);
 }
 
 .settings-row__value {
@@ -67,7 +67,7 @@ defineProps<{
   flex-direction: column;
   align-items: flex-end;
   text-align: right;
-  font-size: var(--font-size-13);
+  font-size: var(--font-size-14);
   color: var(--Theme-text-primary);
   line-height: var(--line-height-body);
   min-width: 0;
@@ -77,14 +77,15 @@ defineProps<{
 .settings-row__value.is-mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: var(--font-size-12);
+  font-size: var(--font-size-13);
 }
 
 .settings-row__hint {
   margin-top: 2px;
   font-family: var(--font-sans);
-  font-size: var(--font-size-12);
+  font-size: var(--font-size-13);
   color: var(--Theme-text-tertiary);
+  line-height: var(--line-height-body);
 }
 
 .tone-warning {

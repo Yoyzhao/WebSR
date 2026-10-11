@@ -556,6 +556,28 @@ with TestClient(app) as client:
           prof.source == "calibration" and prof.tile == 512 and prof.using_fallback is False,
           f"{prof.source} {prof.tile} {prof.using_fallback}")
 
+    print("-- 8.2b 能力快照也是消费侧（硬件能力页「保守取值」横幅的判据）--")
+    # 🔴 为什么单列：`GET /api/system/capabilities` 的 `using_fallback` 决定硬件能力页
+    #    横幅「当前使用保守参数…」是否显示。它原先调 `read_calibration_view(指纹)`
+    #    **漏传 model_id** → 只匹配"通用记录"（`model_id IS NULL`）→ **恒取不到** →
+    #    横幅永不消失、参数来源恒为「保守取值（未标定）」，且**重新标定多少次都没用**
+    #    （标定本身成功入库，只是没人读得到它）。2026-10-11 实测反馈修复。
+    _origin = sysinfo.probe_model_id
+    check("快照取数按「探针模型 × 指纹」——纯指纹口径取不到该模型的记录（缺陷原形）",
+          sysinfo.read_calibration_view(fp, None) is None)
+    sysinfo.probe_model_id = lambda: model_row.id  # 本隔离环境无内置探针模型，指到已登记模型
+    try:
+        check("快照口径能取回该模型的标定记录",
+              sysinfo.read_snapshot_calibration(fp) is not None)
+    finally:
+        sysinfo.probe_model_id = _origin
+
+    # 快照是**进程内缓存**：标定落库后不作废，界面同样看不到变化
+    _snap1, _ = sysinfo.get_capability_snapshot()
+    sysinfo.invalidate_capability_snapshot()
+    _snap2, _ = sysinfo.get_capability_snapshot()
+    check("作废能力快照后确实被**重建**（不是继续返回同一份缓存）", _snap1 is not _snap2)
+
     print("-- 8.3 阶段 E：连续 2 次高位 → 下一次任务降一档 --")
     engine_decision.watermark.get_tracker().reset()
     hw = watermark.WaterLevel(vram_used_mb=9500, vram_total_mb=10000)

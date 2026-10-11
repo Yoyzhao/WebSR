@@ -158,11 +158,11 @@ function pollDownload(entry: DownloadCatalogEntry) {
     }
     if (st.status === 'completed' && st.model_id) {
       if (st.conversion_triggered) {
-        ElMessage.info('下载完成，正在应用内转换（导出实测数十秒）…')
+        ElMessage.info('下载完成，正在转换格式（通常需要数十秒）…')
         pollConversion(st.model_id)
       } else {
         await Promise.all([load(), loadCatalog()])
-        ElMessage.success(`模型「${entry.name}」已登记（转换环境未安装，保持待转换状态）`)
+        ElMessage.success(`模型「${entry.name}」已加入模型库，需先完成格式转换才能使用`)
       }
     }
   }, 800)
@@ -279,10 +279,12 @@ onMounted(() => {
       />
     </div>
 
-    <p class="mp-note">
-      模型不做自动推荐：引擎不会替你挑选，也不会按显存排序。置灰只表示「当前档位跑不动」，
-      不是模型本身有问题 —— 换到更高档位的机器上即可正常使用。
-    </p>
+    <!-- 2026-10-11：删去前半段「模型不做自动推荐：引擎不会替你挑选，也不会按显存排序」。
+         它与工作台那句「模型始终由你选择，系统不做推荐」是同一件事说两遍，且都是
+         **否定式表述**——用户要的是「哪些能用、为什么这个不能用」，不是被告知系统不做什么。
+         「不做推荐」由行为保证（无推荐标记、排序不干预），无需声明。
+         只保留后半段**有解释价值**的置灰说明。 -->
+    <p class="mp-note">置灰只表示当前硬件档位跑不动，并非模型本身有问题——换到更高档位的机器上即可正常使用。</p>
 
     <!-- 加载态 -->
     <div v-if="loading" class="mp-skeleton">
@@ -294,7 +296,7 @@ onMounted(() => {
       v-else-if="filtered.length === 0"
       icon-size="48"
       :title="models.length === 0 ? '模型库为空' : '当前筛选下没有模型'"
-      :description="models.length === 0 ? '把 .onnx / OpenVINO IR / ncnn 模型放入 data/models 目录，或点击右上角导入' : '换一个筛选条件试试'"
+      :description="models.length === 0 ? '点击右上角「导入模型」添加本地模型，或从下方目录下载社区模型' : '换一个筛选条件试试'"
     >
       <template #action>
         <button v-if="models.length === 0" type="button" class="mp-empty-act" @click="importOpen = true">
@@ -321,8 +323,8 @@ onMounted(() => {
       <header class="mp-dl-head">
         <h3 class="mp-dl-title">获取更多模型</h3>
         <p class="mp-dl-sub">
-          按效果优先整理的社区模型（{{ catalog.items.length }} 项，均经实测可转换）。下载后自动应用内转换并登记，
-          转换{{ catalog.conversion.available ? '环境就绪' : '环境未安装：将保持待转换状态' }}。
+          按效果优先整理的社区模型（共 {{ catalog.items.length }} 项）。下载后会自动完成格式转换并加入模型库，
+          {{ catalog.conversion.available ? '当前可直接转换。' : '当前缺少转换环境，下载后需另行转换才能使用。' }}
         </p>
       </header>
       <div class="mp-dl-grid">
@@ -368,8 +370,8 @@ onMounted(() => {
 .models-page {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 24px 28px 40px;
+  gap: var(--Scale-space-5);
+  padding: var(--Scale-space-5) var(--Scale-space-6) 40px;
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
@@ -379,19 +381,20 @@ onMounted(() => {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px 24px;
-  padding: 12px 16px;
+  gap: 10px var(--Scale-space-5);
+  padding: var(--Scale-space-3) var(--Scale-space-4);
   border: 1px solid var(--Theme-border-subtle);
   border-radius: var(--Scale-radius-card);
-  background: var(--Theme-bg-panel);
+  background-color: var(--Theme-bg-panel);
+  background-image: var(--Theme-sheen-panel);
 }
 
 .mp-sum-item {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  font-size: var(--font-size-13);
-  line-height: 18px;
+  gap: var(--Scale-space-2);
+  font-size: var(--font-size-14);
+  line-height: 20px;
 }
 
 .mp-sum-item-grow {

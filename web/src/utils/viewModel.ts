@@ -10,7 +10,7 @@
  *    否则一旦契约微调，改动会散落到所有页面。
  */
 import type { Artifact, Model, Task, TaskResolved } from '@/types/api'
-import { STATUS_LABEL, STATUS_TONE } from '@/constants'
+import { STATUS_LABEL, STATUS_TONE, backendLabel } from '@/constants'
 import { formatTime, formatDuration, formatParams, formatBytes, formatResolution, formatPercent } from '@/utils/format'
 
 export type Tone = 'neutral' | 'primary' | 'success' | 'warning' | 'error'
@@ -106,9 +106,9 @@ function buildParamRows(task: Task): ParamRowVM[] {
   const rows: ParamRowVM[] = []
 
   rows.push({
-    label: '后端',
-    requested: p.auto || !p.backend ? null : p.backend,
-    resolved: r?.backend ?? null,
+    label: '加速方式',
+    requested: p.auto || !p.backend ? null : backendLabel(p.backend),
+    resolved: r?.backend ? backendLabel(r.backend) : null,
     usingFallback: r?.using_fallback,
     reason: pick('后端', 'EP', 'backend'),
   })
@@ -122,7 +122,7 @@ function buildParamRows(task: Task): ParamRowVM[] {
   })
 
   rows.push({
-    label: '分块 tile',
+    label: '分块大小',
     requested: p.auto || p.tile === null ? null : p.tile,
     resolved: r?.tile ?? null,
     usingFallback: r?.using_fallback,
@@ -205,7 +205,12 @@ export interface ModelVM {
   architecture: string
   format: string
   scaleText: string
+  /** 适配简介原文（拼回 `descLead` + `descDetail` 即得），供 title 悬浮全文用 */
   description: string
+  /** 简介的**首句**——「这是什么」的定位，是卡片上最该被看见的一句 */
+  descLead: string
+  /** 简介的其余部分——「适合/不适合」的补充，低优先级 */
+  descDetail: string
   minVramText: string
   fileSizeText: string
   stepsText: string
@@ -214,6 +219,29 @@ export interface ModelVM {
   disabled: boolean
   disabledReason: string
   removable: boolean
+}
+
+/**
+ * 把适配简介拆成「定位 + 补充」两级（2026-10-11）。
+ *
+ * **为什么拆**：T-716 的简介统一按「定位 + 适合 + 不适合」三段撰写，但此前整段
+ * 以同一字号、同色渲染成 3 行文字块 —— 与模型名称争夺注意力，用户无法一眼看出
+ * 「这个模型是干什么的」。拆开后卡片层级变成 **名称 > 定位 > 补充**，
+ * 名称与定位都能被扫读命中，补充信息退居次要且可折叠。
+ *
+ * **拆分口径**：以**首个句末标点**（。！？）为界。这与项目既有撰稿约定一致 ——
+ * `builtin_catalog.py` / `download_catalog.py` 的 description 一律「定位句。」开头。
+ * 分号、逗号**不**作为切分点（定位句内常有「（如 SRVGGNetCompact，1.21M 参数）」这类括注）。
+ *
+ * **安全回落**：无句末标点、或首句长到不像一句（超过 64 字）时，**整段作为 lead**、
+ * detail 留空 —— 宁可少一级层级，也绝不截断或丢失原文。
+ */
+function splitDescription(desc: string): { lead: string; detail: string } {
+  const text = (desc ?? '').trim()
+  if (!text) return { lead: '', detail: '' }
+  const m = text.match(/^([^。！？\n]{2,64})([。！？])\s*([\s\S]*)$/)
+  if (!m) return { lead: text, detail: '' }
+  return { lead: m[1] + m[2], detail: m[3].trim() }
 }
 
 export function toModelVM(model: Model): ModelVM {
@@ -229,6 +257,7 @@ export function toModelVM(model: Model): ModelVM {
   }
 
   const ncnnConditional = model.supported_backends?.includes('ncnn') ?? false
+  const { lead, detail } = splitDescription(model.description ?? '')
 
   return {
     id: model.id,
@@ -238,6 +267,8 @@ export function toModelVM(model: Model): ModelVM {
     // ×1 是修复类（不改变尺寸），单写「×1」会被误读成放大一档 → 标签带语义
     scaleText: model.scale === 1 ? '×1 修复' : model.scale ? `×${model.scale}` : '',
     description: model.description ?? '',
+    descLead: lead,
+    descDetail: detail,
     minVramText: model.min_vram_mb ? `${requiredGb.toFixed(1)} GB` : '不适用',
     fileSizeText: formatBytes(model.size_bytes),
     stepsText: String(model.capabilities?.num_inference_steps ?? 1),

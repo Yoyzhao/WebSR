@@ -3,11 +3,14 @@
 设计决策（STEP-5D §T-604）：
 - 只登记**产品认可的内置模型**；`data/models/` 下的基准变体
   （`RealESRGAN_x4_fp16all.onnx` / `RealESRGAN_x4_s512.onnx` / IR fp32 对）
-  是开发期基准产物，**不进入产品模型库**；
+  是开发期基准产物，**不进入产品模型库**。
+  ⚠️ 2026-10-11：除 `RealESRGAN_x4_s512.onnx`（被 `verify_t806_loader.py` 真实读取）外，
+  其余基准产物与旁车元信息已清理（回收站）；需要时按 `tools/convert_to_onnx.py` 重新导出。
 - 元信息（架构 / 许可证 / 最低显存 / 能力声明）来源于前置调研与 P0 实测
   （docs/tech/research/），属模型固有属性，不是"单机实测数值"，可以声明；
-- `capabilities.supports_tile0` 依据 `data/models/inspect.json` 的
-  `has_dynamic_hw: true`（RealESRGAN_x4 动态 H/W 已验证）；
+- `capabilities.supports_tile0` 沿用**开发期结构检查的结论**：RealESRGAN_x4 的 H/W 为动态轴。
+  结论本身不依赖那个检查文件（`data/models/inspect.json` 已于 2026-10-11 清理）；
+  运行时以 `engine/model_introspect.py` 对**真实 ONNX 结构**的实读为准；
 - 文件缺失时跳过并告警（允许裁剪分发），不阻断启动。
 - **风格由「模型」区分，不由参数区分**（PRD §7.3：模型不做自动推荐，选择权在用户）：
   通用 / 写实 = `RealESRGAN_x4plus`，动漫 = `RealESRGAN_x4plus_anime_6B`，
@@ -65,7 +68,12 @@ BUILTIN_MODELS: tuple[BuiltinModelSpec, ...] = (
         path="RealESRGAN_x4_fp16.onnx",
         name="RealESRGAN_x4plus_fp16",
         architecture="RRDBNet",
-        description="上者的 fp16 半精度导出，适用场景完全相同（写实照片 4 倍放大）。"
+        # 2026-10-11：首句由「上者的 fp16 半精度导出」改为自足表述。
+        # 「上者」只在**目录声明顺序**里成立，而模型库是并排网格、
+        # 工作台是下拉列表 —— 用户看到的上下文里根本没有「上者」，
+        # 该句被提升为定位句（主色）后更是第一眼就能看到这句无主语的话。
+        # 每条简介都必须能脱离上下文独立成立。
+        description="RealESRGAN_x4plus 的 fp16 半精度导出，适用场景完全相同（写实照片 4 倍放大）。"
                     "体积减半，在支持 fp16 的后端上吞吐约为 fp32 的 2 倍；"
                     "显存紧张或追求速度时优先选它。",
         format="onnx",

@@ -41,6 +41,22 @@ BIG = WORK / "t706-big.png"
 
 BASE = "http://127.0.0.1:8000/api"
 TERMINAL = ("completed", "failed", "canceled", "interrupted")
+
+#: 本脚本全程使用的放大倍数（Bug-002 的**第三处**）。
+#:
+#: 🔴 **为什么要有这个常量**：`available_models()` 原先只按 `min_vram_mb` 排序、
+#:     **从不按 scale 过滤**，而 `create_task()` 把 `scale` 写死为 4。
+#:     T-717 起模型库补齐 ×1/×2/×3，「门槛最低」的那个恰为 **×1** 模型
+#:     （`1xDeH264_realplksr`，门槛 1024 MB）→ 提交被前置校验拒绝：
+#:       `VALIDATION_ERROR`「…的放大倍数为 ×1，与请求的 ×4 不一致」
+#:     于是 `TC-S1-010/013/030/061` 全部拿不到 `resolved` 而红。
+#:     **后端行为完全正确**（T-706 自己引入的倍数前置校验在正常工作），错的是脚本假设
+#:     「库里总有一个 ×4 模型门槛最低」。
+#:
+#: ⚠️ 本脚本原先就有**两种口径并存**：`f01` 用 `scale = model.get("scale") or 4`
+#:     （从模型推导，正确），其余用例靠 `create_task` 的默认值 4（写死）。
+#:     统一到 `SCALE` 后，选型与提交只剩**一个**倍率来源。
+SCALE = 4
 DATA_ROOT = ROOT / "data"
 
 #: PRD §2.5 F-04 的量化阈值（照抄，不自拟）
@@ -155,10 +171,16 @@ def upload(path: Path) -> str | None:
 
 
 def available_models() -> list[dict]:
+    """当前**可用且倍率为 SCALE** 的模型，按显存门槛升序（门槛低 = 最容易跑通，用例更快）。
+
+    ⚠️ `scale` 过滤是**必需**的（Bug-002）：模型倍率是契约字段（契约 §3.2），
+    提交端的倍数前置校验会拒绝不匹配的组合。只按门槛排序会选中别的倍率模型
+    （如 ×1 的 `1xDeH264_realplksr`）→ 提交被 400 拒 → 用例拿不到 `resolved`。
+    """
     _, models = http("GET", "/models")
     if not isinstance(models, list):
         return []
-    return sorted([m for m in models if m.get("available")],
+    return sorted([m for m in models if m.get("available") and m.get("scale") == SCALE],
                   key=lambda m: (m.get("min_vram_mb") or 0, m["id"]))
 
 
@@ -187,7 +209,7 @@ def pick_two_distinct_models() -> list[dict]:
 
 
 def create_task(file_id: str, model_id: str, *, auto: bool = True,
-                tile: int | None = None, scale: int = 4):
+                tile: int | None = None, scale: int = SCALE):
     return http("POST", "/tasks", json.dumps({
         "type": "upscale", "file_id": file_id,
         "params": {"scale": scale, "model_id": model_id, "tile": tile,
@@ -247,7 +269,9 @@ def f01(file_id: str, model: dict) -> None:
     section("F-01 单图超分（TC-S1-001 ~ 006）")
     src = Image.open(SMALL)
     sw, sh = src.size
-    scale = model.get("scale") or 4
+    # 倍率**从所选模型推导**（`available_models()` 已保证 == SCALE），
+    # 期望尺寸也用它 —— 这样「请求值」与「期望值」同源，不会自相矛盾。
+    scale = model.get("scale") or SCALE
 
     st, created = create_task(file_id, model["id"], scale=scale)
     check("TC-S1-001 提交返回 201 且带回任务号", st == 201 and bool((created or {}).get("id")),
@@ -859,9 +883,19 @@ def main() -> int:
     time.sleep(1.0)
     model_id, model = pick_model()
     check("夹具就绪（320×240 小图 + 640×480 多块图）", SMALL.is_file() and BIG.is_file())
-    check("取得可用模型（从 /api/models 推导，不硬编码）", bool(model_id),
+    check(f"取得 ×{SCALE} 可用模型（从 /api/models 推导，不硬编码）", bool(model_id),
           f"{model_id} {model.get('name') if model else ''} scale={model.get('scale') if model else ''}")
     if not model_id:
+        # 自诊断：把「库里到底有哪些倍率可用」打出来，否则只报"准备失败"无从下手
+        _, models = http("GET", "/models")
+        inv: dict = {}
+        for m in models if isinstance(models, list) else []:
+            inv.setdefault(m.get("scale"), [0, 0])
+            inv[m.get("scale")][0] += 1
+            if m.get("available"):
+                inv[m.get("scale")][1] += 1
+        print(f"  库存按倍率（总数/可用）：{ {k: f'{v[0]}/{v[1]}' for k, v in sorted(inv.items(), key=lambda x: str(x[0]))} }")
+        print(f"  ⚠ 本脚本固定使用 ×{SCALE}；若该倍率无可用模型，属**环境数据不足**，请先导入对应倍率模型或改 SCALE")
         print("\n准备失败，脚本中止")
         return 2
 

@@ -49,7 +49,7 @@ export const ERROR_MESSAGES: Record<string, ErrorCopy> = {
   },
   VRAM_INSUFFICIENT: {
     message: '显存不足：已自动降档仍无法完成',
-    suggestion: '降低放大倍数，或改用 fp16 量化模型',
+    suggestion: '请降低放大倍数，或改用显存占用更低的模型',
   },
   RAM_INSUFFICIENT: { message: '物理内存不足', suggestion: '关闭占用内存的其他程序，或降低并发度与分块尺寸' },
   TASK_NOT_FOUND: { message: '任务不存在或已被清理', suggestion: '刷新任务列表获取最新状态' },
@@ -57,8 +57,8 @@ export const ERROR_MESSAGES: Record<string, ErrorCopy> = {
   TASK_ALREADY_RUNNING: { message: '已有任务正在执行', suggestion: '当前并发度为 1，请等待其完成后再提交' },
   METHOD_NOT_ALLOWED: { message: '该地址不支持此请求方法', suggestion: '请检查请求方法后重试' },
   EP_FALLBACK_DETECTED: {
-    message: '执行提供器未生效，已回退到 CPU',
-    suggestion: '请到硬件能力页查看 EP 验证证据，确认驱动与依赖是否正确安装',
+    message: '加速方式未生效，已回退到 CPU',
+    suggestion: '请到硬件能力页查看加速方式验证结果，确认显卡驱动与运行库是否正确安装',
   },
   ENGINE_BUSY: { message: '推理引擎正被占用', suggestion: '请稍后重试' },
   INTERNAL_ERROR: { message: '服务端发生未预期错误', suggestion: '请导出诊断 JSON 并查看日志定位原因' },

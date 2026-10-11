@@ -36,7 +36,11 @@ defineProps<{
 
 <style scoped>
 .section-card {
-  background: var(--Theme-bg-panel);
+  position: relative;
+  background-color: var(--Theme-bg-panel);
+  /* 顶部微光（2026-10-11）：用渐变而非投影建立质感。
+   * ⚠️ 刻意不加 box-shadow —— 03 §5 禁止事项第 6 条明令「常规卡片不加阴影」。 */
+  background-image: var(--Theme-sheen-panel);
   border: 1px solid var(--Theme-border-subtle);
   border-radius: var(--Scale-radius-card);
   padding: var(--Scale-space-5);
@@ -62,7 +66,8 @@ defineProps<{
 
 /* 卡片内的次级容器：抬升面，无描边 */
 .section-card.is-elevated {
-  background: var(--Theme-bg-elevated);
+  background-color: var(--Theme-bg-elevated);
+  background-image: none;
   border-color: transparent;
 }
 
@@ -75,10 +80,24 @@ defineProps<{
 
 .section-card__title {
   margin: 0;
-  font-size: var(--font-size-14);
+  font-size: var(--font-size-15);
   font-weight: 600;
   color: var(--Theme-text-primary);
   line-height: var(--line-height-tight);
+  letter-spacing: 0.01em;
+}
+
+/* 标题左侧的强调竖条：给分组一个稳定的视觉锚点，
+ * 使多张卡片并排时能被快速区分（不依赖分割线，见 03 §5-7）。 */
+.section-card__title::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 1em;
+  margin-right: var(--Scale-space-2);
+  border-radius: var(--Scale-radius-pill);
+  background: var(--Theme-primary);
+  vertical-align: -0.12em;
 }
 
 /* 卡体作为容器查询单元：SettingsRow 依据卡体实际宽度决定行内对齐方式
@@ -89,8 +108,9 @@ defineProps<{
 }
 
 .section-card__subtitle {
-  font-size: var(--font-size-12);
+  font-size: var(--font-size-13);
   color: var(--Theme-text-tertiary);
+  line-height: var(--line-height-body);
 }
 
 .section-card__actions {

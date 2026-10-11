@@ -48,6 +48,19 @@ IMG = ROOT / ".workbuddy" / "tmp" / "t704-input.png"
 BASE = "http://127.0.0.1:8000/api"
 TERMINAL = ("completed", "failed", "canceled", "interrupted")
 
+#: 本脚本全程使用的放大倍数（Bug-002）。
+#:
+#: 🔴 **为什么要有这个常量**：原先 `pick_model()` 只按 `min_vram_mb` 排序取首个、
+#:     **从不按 scale 过滤**，而 `create_task()` 把 `scale` 写死为 4。
+#:     T-717 起模型库补齐 ×1/×2/×3，「门槛最高」的那个恰为 **×2** 模型
+#:     （`2xHFA2kAVCCompact`）→ 提交被后端前置校验拒绝：
+#:       `VALIDATION_ERROR`「…的放大倍数为 ×2，与请求的 ×4 不一致」
+#:     **后端行为完全正确**（T-706 引入的倍数前置校验在正常工作），错的是脚本假设。
+#:
+#: 本脚本要触发**真实 OOM**，对模型的显存门槛有下限要求（见 `pick_model` 说明），
+#: 因此倍率与门槛是**两个必须同时满足**的筛选条件。
+SCALE = 4
+
 FAIL: list[str] = []
 SKIP: list[str] = []
 PASS = 0
@@ -130,15 +143,19 @@ def upload() -> str | None:
 
 
 def pick_model() -> tuple[str, str] | tuple[None, None]:
-    """挑**当前可用、且显存门槛最高**的模型。
+    """挑**当前可用、倍率为 SCALE、且显存门槛最高**的模型。
 
     「门槛最高」是功能性选择（要触发的是**资源耗尽**，太轻的模型在大 tile 下也未必耗尽），
     不是硬编码某个型号 —— 若探测不到 OOM，脚本会 SKIP 而非伪造结论。
+
+    ⚠️ `scale` 过滤是**必需**的（Bug-002）：模型倍率是契约字段（契约 §3.2），
+    提交端的前置校验会拒绝不匹配的组合。只按门槛排序会选中别的倍率模型，
+    导致提交被 400 拒 —— 后端行为正确，错的是脚本假设。
     """
     _, models = http("GET", "/models")
     if not isinstance(models, list):
         return None, None
-    usable = [m for m in models if m.get("available")]
+    usable = [m for m in models if m.get("available") and m.get("scale") == SCALE]
     if not usable:
         return None, None
     usable.sort(key=lambda m: (-(m.get("min_vram_mb") or 0), m["id"]))
@@ -146,7 +163,7 @@ def pick_model() -> tuple[str, str] | tuple[None, None]:
 
 
 def create_task(file_id: str, model_id: str, *, auto: bool = True, tile: int | None = None,
-                backend: str | None = None, scale: int = 4):
+                backend: str | None = None, scale: int = SCALE):
     return http("POST", "/tasks", json.dumps({
         "type": "upscale", "file_id": file_id,
         "params": {"scale": scale, "model_id": model_id, "tile": tile,
@@ -197,8 +214,18 @@ def main() -> int:
     file_id = upload()
     model_id, model_name = pick_model()
     check("上传夹具成功", bool(file_id), str(file_id))
-    check("取得可用模型（从 /api/models 推导，不硬编码）", bool(model_id), f"{model_id} {model_name}")
+    check(f"取得 ×{SCALE} 可用模型（从 /api/models 推导，不硬编码）", bool(model_id), f"{model_id} {model_name}")
     if not file_id or not model_id:
+        # 自诊断：把「库里到底有哪些倍率可用」打出来，否则只报"准备失败"无从下手
+        _, models = http("GET", "/models")
+        inv: dict = {}
+        for m in models if isinstance(models, list) else []:
+            inv.setdefault(m.get("scale"), [0, 0])
+            inv[m.get("scale")][0] += 1
+            if m.get("available"):
+                inv[m.get("scale")][1] += 1
+        print(f"  库存按倍率（总数/可用）：{ {k: f'{v[0]}/{v[1]}' for k, v in sorted(inv.items(), key=lambda x: str(x[0]))} }")
+        print(f"  ⚠ 本脚本固定使用 ×{SCALE}；若该倍率无可用模型，属**环境数据不足**，请先导入对应倍率模型或改 SCALE")
         print("\n准备失败，脚本中止")
         return 2
 
@@ -348,15 +375,27 @@ def main() -> int:
 
     # 本机该模型**有标定**（source=calibration），保底档断言会被弱化 ——
     # 因此另找一个**无标定记录**的可用模型，让保底档真正被走到。
+    #
+    # ⚠️ `scale == SCALE` 过滤**必需**（Bug-002 的第二处）：本脚本的 `run_task` 按
+    # `SCALE` 提交，若此处选到别的倍率的可用模型（如 ×2 的 `2xHFA2kAVCCompact`），
+    # 提交会被前置校验拒成 400 → `t_un` 没有 `resolved` → 下面 4 条断言全部拿到 None 而红。
+    # 症状与 Bug-002 一模一样，但藏在另一处选型逻辑里，**修一处不够**。
     calibrated = {f"mdl_{r.get('model_id')}" for r in (cal_before.get("records") or [])}
     _, models_all = http("GET", "/models")
-    uncal = [m for m in (models_all or []) if m.get("available") and m["id"] not in calibrated]
+    uncal = [m for m in (models_all or [])
+             if m.get("available") and m.get("scale") == SCALE and m["id"] not in calibrated]
     if not uncal:
-        skip("无标定模型走保底档", "当前所有可用模型都有标定记录")
+        skip("无标定模型走保底档",
+             f"当前所有 ×{SCALE} 可用模型都有标定记录（或该倍率无可用模型）")
     else:
         uncal.sort(key=lambda m: (m.get("min_vram_mb") or 0, m["id"]))
+        print(f"  · 无标定的 ×{SCALE} 可用模型：{uncal[0]['id']} {uncal[0]['name']}")
         t_un = run_task(file_id, uncal[0]["id"], auto=True)
         res_un = t_un.get("resolved") or {}
+        if not res_un:
+            # 自诊断：提交被拒时直接打出后端给的错误体，别让断言只显示 None
+            print(f"  ⚠ 提交未产出 resolved（status={t_un.get('status')}）："
+                  f"{json.dumps(t_un.get('error') or {}, ensure_ascii=False)[:200]}")
         check(f"无标定模型（{uncal[0]['id']}）走保底档：using_fallback=True",
               res_un.get("using_fallback") is True, str(res_un.get("using_fallback")))
         check("保底档 source=fallback 且并发度为 1（下界不冒进）",

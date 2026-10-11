@@ -26,7 +26,7 @@ import ActionButtons from '@/components/ActionButtons.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useTaskStore } from '@/stores/tasks'
 import { downloadFile, fileContentUrl } from '@/api/client'
-import { PAGE_MAX_WIDTH } from '@/constants'
+import { PAGE_MAX_WIDTH, UNAVAILABLE_COPY, backendLabel } from '@/constants'
 import { toTaskVM, type TaskVM } from '@/utils/viewModel'
 import type { Task } from '@/types/api'
 
@@ -133,19 +133,17 @@ async function onAction({ key, id }: { key: string; id: string }) {
     }
   }
   if (key === 'retry') {
-    // S2 阶段能力；后端契约 v1.0 无重试端点 —— 界面入口已禁用
-    return ElMessage.info('重试功能属 S2 阶段，尚未实现')
+    // 契约 v1.0 无重试端点 —— 入口已禁用，这里兜住被键盘/程序触发的调用
+    return ElMessage.info(UNAVAILABLE_COPY.retry)
   }
 }
 
 function clearFinished() {
-  // 任务删除 / 清理属 F-12（S2）；后端契约 v1.0 无 DELETE /api/tasks —— 入口已禁用
-  ElMessage.info('任务清理属 F-12（S2 阶段），尚未实现')
+  ElMessage.info(UNAVAILABLE_COPY.clearTasks)
 }
 
 function onRemove() {
-  // 单任务删除同属 F-12（S2）；契约 v1.0 无 DELETE /api/tasks/{id} —— 入口已禁用
-  ElMessage.info('任务删除属 F-12（S2 阶段），尚未实现')
+  ElMessage.info(UNAVAILABLE_COPY.removeTask)
 }
 
 onMounted(async () => {
@@ -166,10 +164,10 @@ watch(
   <div class="tasks-page" :style="{ maxWidth: PAGE_MAX_WIDTH.tasks + 'px' }">
     <PageHeader title="任务中心" subtitle="全部超分修复任务的执行记录与产出">
       <template #actions>
-        <!-- 清理任务属 F-12（S2）；契约 v1.0 无 DELETE /api/tasks —— 入口禁用并标注 -->
+        <!-- 清理任务：契约 v1.0 无 DELETE /api/tasks —— 入口禁用并写明原因 -->
         <ActionButtons
           :actions="[
-            { key: 'clear', label: '清理已完成', disabled: true, disabledReason: '任务清理属 F-12（S2 阶段），尚未实现' },
+            { key: 'clear', label: '清理已完成', disabled: true, disabledReason: UNAVAILABLE_COPY.clearTasks },
           ]"
           size="sm"
           @action="clearFinished"
@@ -326,7 +324,7 @@ watch(
                 <div class="tp-file">
                   <span class="tp-model">{{ vm.modelName }}</span>
                   <span class="tp-file-sub tp-mono" :title="vm.resolved?.backend">
-                    {{ vm.resolved?.backend ?? '—' }}{{ vm.resolved?.precision ? ' · ' + vm.resolved.precision : '' }}
+                    {{ vm.resolved?.backend ? backendLabel(vm.resolved.backend) : '—' }}{{ vm.resolved?.precision ? ' · ' + vm.resolved.precision : '' }}
                   </span>
                 </div>
               </td>
@@ -346,9 +344,9 @@ watch(
                       { key: 'compare', label: '对比', disabled: !vm.isDone, disabledReason: '任务完成后才能对比' },
                       { key: 'download', label: '下载', disabled: !vm.hasOutput, disabledReason: '暂无产出文件' },
                       vm.isRunning ? { key: 'cancel', label: '取消' } : null,
-                      // 重试属 S2；契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并标注
+                      // 重试：契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并写明原因
                       vm.isFailed || vm.isInterrupted || vm.status === 'canceled'
-                        ? { key: 'retry', label: '重试', disabled: true, disabledReason: '重试属 S2 阶段，尚未实现' }
+                        ? { key: 'retry', label: '重试', disabled: true, disabledReason: UNAVAILABLE_COPY.retry }
                         : null,
                     ].filter(Boolean) as any
                   "
@@ -378,8 +376,8 @@ watch(
 .tasks-page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 24px 28px 40px;
+  gap: var(--Scale-space-5);
+  padding: var(--Scale-space-5) var(--Scale-space-6) 40px;
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;

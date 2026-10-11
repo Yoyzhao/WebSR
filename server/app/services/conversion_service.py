@@ -266,13 +266,18 @@ def _run(job_id: str, model_id: int) -> None:
 
 
 def _find_existing(session, out_name: str) -> Model | None:
-    """产物已登记过就复用——不是"猜测"，而是同一输入只该有一次产物。"""
-    stem = Path(out_name).stem
+    """产物已登记过就复用——不是"猜测"，而是同一输入只该有一次产物。
+
+    ⚠️ 与 `download_service._existing_model` 同理（2026-10-11）：产物若撞名被
+    `save_import` 改成 `…__from10_1.onnx`，精确比对会失配 → 转换会被重复触发。
+    故穿透防覆盖后缀后再比对。
+    """
+    target = Path(out_name).stem
     rows = session.scalars(
         select(Model).where(Model.format == "onnx", Model.source == "imported")
     ).all()
     for r in rows:
-        if Path(r.path).stem == stem:
+        if target in model_registry.normalized_stems(Path(r.path).stem):
             p = model_registry._abs(r.path)
             if p.is_file() and p.stat().st_size > 0:
                 return r

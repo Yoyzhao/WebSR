@@ -139,7 +139,14 @@ with TestClient(app) as client:
     check("导入 .pth → 201", r.status_code == 201)
     pth = r.json()
     check("status=needs_convert 且不可用", pth.get("status") == "needs_convert" and pth.get("available") is False)
-    check("原因文案指向离线转换", "离线转换" in (pth.get("unavailable_reason") or ""))
+    # 2026-10-11：判据由匹配「离线转换」改为匹配**产品约束本身**。
+    # 「离线转换」是内部术语，用户不知道该做什么；T-719 已把该文案改说人话
+    # （"这是训练权重格式（.pth/.safetensors），需转换为 ONNX 后才能使用"）。
+    # 要守的约束是「用户能看出这是训练权重、且知道要转成什么」，不是某句措辞 ——
+    # 否则下次改文案又会误报。
+    _reason = pth.get("unavailable_reason") or ""
+    check("原因文案说清「训练权重 + 需转 ONNX」（用户可据此行动）",
+          "训练权重" in _reason and "ONNX" in _reason, _reason[:90])
 
     print("== 5. ADR-003 格式路由校验 ==")
     r = client.post("/api/models/import", data={
@@ -227,6 +234,93 @@ with TestClient(app) as client:
             xvol_dst.rmdir()
         except OSError:
             pass
+
+    print("== 6c. 反查必须穿透防覆盖后缀（撞名 `X` → `X_1`）==")
+    # 🔴 为什么必须单独测这一条（2026-10-11 实测缺陷）：
+    #   `save_import` 遇到同名文件会**改名**（`X.pth` → `X_1.pth`，只防覆盖、绝不覆盖）。
+    #   而「目录条目是否已下载」（`download_service._existing_model`）与「适配简介反查」
+    #   （`model_registry._download_spec_for`）原先都按 stem **精确比对** —— 一旦撞过名就
+    #   **永久静默失配**：已下载的条目在界面上继续显示「下载」（点了还会再下一份），
+    #   简介退回兜底文案「用户导入模型」。实测命中条目 `dl_2x_ani4k_compact`
+    #   （磁盘上是 `2x_Ani4K_Compact_35000_1.pth`，来源名是 `2x_Ani4K_Compact_35000`）。
+    import types as _types  # noqa: PLC0415
+
+    from app.models.download_catalog import DOWNLOAD_CATALOG  # noqa: E402
+    from app.services import download_service as _dls  # noqa: E402
+    from app.services import model_registry as _reg  # noqa: E402
+
+    def _fake(path: str):
+        return _types.SimpleNamespace(path=path)
+
+    # 用例条目：优先取「来源名本来就以 `_<数字>` 结尾」的那条 —— 它是误剥风险最高的形态
+    entry = next(
+        (e for e in DOWNLOAD_CATALOG
+         if Path(e.filename).stem.rsplit("_", 1)[-1].isdigit()),
+        DOWNLOAD_CATALOG[0],
+    )
+    base = Path(entry.filename).stem
+    print(f"  · 用例条目：{entry.id}（来源 stem={base}）")
+    check("归一化**不误剥**合法以 `_<数字>` 结尾的来源名",
+          base in _reg.normalized_stems(base), f"{_reg.normalized_stems(base)}")
+    check("归一化展开出防覆盖形态 `_1`",
+          base in _reg.normalized_stems(f"{base}_1"))
+    check("归一化展开出转换产物形态 `__fromN`",
+          base in _reg.normalized_stems(f"{base}__from42"))
+    check("无关模型不被误命中（用户导入模型无目录简介）",
+          _reg._download_spec_for(_fake("imported/MySR_x4.onnx")) is None)
+    check("撞名后的源 .pth 仍命中文档简介",
+          _reg._download_spec_for(_fake(f"imported/{base}_1.pth")) is not None)
+    check("撞名后的转换产物仍命中文档简介",
+          _reg._download_spec_for(_fake(f"imported/{base}_1__from42.onnx")) is not None)
+
+    # 撞名 + 内容一致 → **复用**（不产生 `_1` 副本，保住规范文件名）
+    dup_payload = b"catalog-dup-payload" * 64
+    r = client.post("/api/models/import", data={
+        "name": entry.name, "format": "pth", "scale": str(entry.scale),
+        "min_vram_mb": "0", "backends": json.dumps(["cpu"]),
+    }, files={"file": (entry.filename, io.BytesIO(dup_payload), "application/octet-stream")})
+    check("首次导入目录同名模型 → 201", r.status_code == 201, f"{r.status_code} {r.text[:160]}")
+    first = r.json()
+    check("落盘为规范文件名（无 `_1`）", Path(first["path"]).name == entry.filename)
+    # 造出「登记被删、文件残留」的孤儿文件（`DELETE` 端点即此语义：只删登记不删文件）
+    r = client.delete(f"/api/models/{first['id']}")
+    check("删除登记不删磁盘文件（前置条件）",
+          r.status_code == 204 and (MODELS / "imported" / entry.filename).is_file())
+    r = client.post("/api/models/import", data={
+        "name": entry.name, "format": "pth", "scale": str(entry.scale),
+        "min_vram_mb": "0", "backends": json.dumps(["cpu"]),
+    }, files={"file": (entry.filename, io.BytesIO(dup_payload), "application/octet-stream")})
+    check("同内容再次导入 → 201", r.status_code == 201)
+    second = r.json()
+    check("同内容撞名 → 复用同一路径（不再堆 `_1` 副本）",
+          Path(second["path"]).name == entry.filename, second["path"])
+    from app.db import get_session as _get_session  # noqa: PLC0415
+
+    _s = _get_session()
+    try:
+        found = _dls._existing_model(_s, entry)
+        check("目录「已下载」判据认得复用后的模型（原先精确比对会失效）",
+              found is not None and str(found.id) == second["id"].removeprefix("mdl_"),
+              f"found={getattr(found, 'id', None)} expect={second['id']}")
+    finally:
+        _s.close()
+
+    # 撞名 + 内容不同 → 改名让路；且后缀**不复合**（`_1` 之后是 `_2`，而非 `_1_2`）
+    r = client.post("/api/models/import", data={
+        "name": "OtherWeight", "format": "pth", "scale": str(entry.scale),
+        "min_vram_mb": "0", "backends": json.dumps(["cpu"]),
+    }, files={"file": (entry.filename, io.BytesIO(b"other-payload" * 64), "application/octet-stream")})
+    third = r.json()
+    check("内容不同撞名 → 改名让路（绝不覆盖）",
+          Path(third["path"]).name == f"{base}_1.pth", third["path"])
+    check("原文件未被覆盖", (MODELS / "imported" / entry.filename).read_bytes() == dup_payload)
+    r = client.post("/api/models/import", data={
+        "name": "ThirdWeight", "format": "pth", "scale": str(entry.scale),
+        "min_vram_mb": "0", "backends": json.dumps(["cpu"]),
+    }, files={"file": (entry.filename, io.BytesIO(b"third-payload" * 64), "application/octet-stream")})
+    fourth = r.json()
+    check("后缀不复合（`_2` 而非 `_1_2`）",
+          Path(fourth["path"]).name == f"{base}_2.pth", fourth["path"])
 
     print("== 7. 筛选 ==")
     r = client.get("/api/models", params={"format": "onnx"})

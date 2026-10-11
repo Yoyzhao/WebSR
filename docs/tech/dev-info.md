@@ -194,10 +194,12 @@ E:/Desktop/Workspace2/WorkBuddySpace/WebSR/
 | `ir/RealESRGAN_x4_fp16.xml` + `.bin` | 31.85 MB | **内置⑤** OpenVINO IR（Intel 核显 / 集显路径，走原生 API） |
 | `RealESRGAN_x2plus.onnx` | 67,156,233 B | **内置⑥** 通用 ×2（RRDBNet，16,703,171 参数；转自官方 `RealESRGAN_x2plus.pth`，同源自检 1.97e-06） |
 | `RealCUGAN_up3x.onnx` | 5,175,535 B | **内置⑦** 动漫 ×3（RealCUGAN，1,286,326 参数；转自 B 站官方 `up3x-latest-no-denoise.pth`，MIT，自检 3.81e-06）。⚠️ 动态导出的尺寸分支按对齐探针烘焙——产物仅对 **4 的倍数**输入保证正确（引擎 tile 恒按 `DEFAULT_ALIGN=8` 补齐，链路安全） |
-| `RealESRGAN_x4_fp16all.onnx` | 33,748,503 B | 基准 · 全量 fp16 |
-| `RealESRGAN_x4_s512.onnx` | 67,129,351 B | 基准 · H/W 冻结为 512 的静态 shape 版 |
-| `ir/RealESRGAN_x4_fp32.xml` + `.bin` | 63.7 MB | 基准 · fp32 IR 对 |
-| `inspect.json` | 1,070 B | 模型结构检查结果 |
+| `RealESRGAN_x4_s512.onnx` | 67,129,351 B | 基准 · H/W 冻结为 512 的静态 shape 版。⚠️ **被 `scripts/test-script/verify_t806_loader.py` 真实读取**（静态约束识别 3 条断言 + 端到端）→ **2026-10-11 经用户确认保留**（删除须先把真断言降级为 skip，属覆盖损失）；清理前须先处理该依赖 |
+
+> **2026-10-11 已清理的基准产物**（开发期产物，不登记入产品库、**无任何运行时读取方**；已送系统回收站，可按需重建）：
+> `RealESRGAN_x4_fp16all.onnx`（33.7 MB）、`ir/RealESRGAN_x4_fp32.xml` + `.bin`（66.8 MB）、`inspect.json`（1.0 KB）、
+> `RealCUGAN_up3x.onnx.meta.json` / `RealESRGAN_x2plus.onnx.meta.json`（旁车元信息，全仓只有写出方 `tools/convert_to_onnx.py`，无读取方）。
+> 重建方式：`tools/convert_to_onnx.py <源 .pth> [--static N] [--fp16] -o data/models/<名>.onnx`（需 `.venvs/sr-convert`）。
 
 ### 5.3 基准结果与脚本
 

@@ -38,6 +38,7 @@ from .ep_verify import (
     VerificationResult,
     deliberately_excluded,
     hardware_fingerprint,
+    provider_label,
     verify_candidates,
 )
 from .fallback import DEFAULT_ALIGN
@@ -95,20 +96,26 @@ def _derive_tier_hardware(facts: DeviceFacts, adopted_providers: list[str]) -> t
     if vram is not None and vram >= _T2_MIN_VRAM_MB:
         return "T2", _LABELS["T2"], f"实读可用显存 {vram / 1024:.1f} GB ≥ 16 GB"
     if gpu_verified:
-        ev = "、".join(gpu_verified)
-        return "T1", _LABELS["T1"], f"存在已验证的 GPU 后端（{ev}）"
+        # 用 `provider_label` 取规范名（CUDA / TensorRT），不直出 ORT provider 类名。
+        # ⚠️ `tier_reason` 是**用户可见文案**（硬件能力页「判定依据」行），直出
+        #    `CUDAExecutionProvider` 会把内部实现名泄漏到界面。口径与前端
+        #    `constants.ts::BACKEND_LABEL` 一致；契约未冻结该字段字面。
+        ev = "、".join(provider_label(p) for p in gpu_verified)
+        return "T1", _LABELS["T1"], f"检测到已验证可用的 GPU 加速方式（{ev}）"
 
     # 兜底说明：把"为什么不是 T1"讲清楚，避免用户以为是软件问题
+    # ⚠️ 同上：这三段同样是**用户可见文案**，故不写「EP 真实性验证」「§6.2 约束 4」
+    #    这类内部术语，只说"做了什么检查、为什么保守"。
     if facts.nvidia and not gpu_verified:
-        reason = ("检测到 NVIDIA GPU，但其后端未通过 EP 真实性验证——"
-                  "档位判定要求后端已验证（静默回退的代价是「看似加速实则更慢」），故按 T0 保守处理")
+        reason = ("检测到 NVIDIA 显卡，但未能确认加速真正生效（静默回退的代价是"
+                  "「看似加速实则更慢」），故按 T0 保守处理")
     elif facts.intel_gpu:
-        reason = ("检测到 Intel GPU，但 OpenVINO 原生路径尚未验证/标定，"
-                  "暂按 T0 保守处理（§6.2 约束 4：实际档位由首次标定裁决）")
+        reason = ("检测到 Intel 显卡，但该加速路径尚未完成验证与标定，"
+                  "暂按 T0 保守处理（实际档位由首次标定裁决）")
     elif facts.probes_failed:
         reason = f"硬件探测部分失败（{'; '.join(facts.probes_failed[:2])}），按最保守档处理"
     else:
-        reason = "未检测到可用 GPU 后端（纯 CPU 路径）"
+        reason = "未检测到可用的 GPU 加速方式（纯 CPU 处理）"
     return "T0", _LABELS["T0"], reason
 
 

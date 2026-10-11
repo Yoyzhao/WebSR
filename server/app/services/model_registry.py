@@ -116,6 +116,25 @@ def _safe_filename(name: str) -> str:
     return re.sub(r"[^\w.\-一-鿿]", "_", base)
 
 
+def _free_dest(directory: Path, filename: str) -> Path:
+    """在 `directory` 内为 `filename` 取一个**不冲突**的名字（绝不覆盖已有文件）。
+
+    ⚠️ 旧实现的 `dest = f"{dest.stem}_{n}{dest.suffix}"` 在循环里**对已改过的名字再改**：
+    两次撞名会得到 `X_1_2`（而非 `X_2`）—— 后缀逐次复合，名字越滚越长、也越难反查。
+    这里以**原始文件名**为基准逐次尝试，保证后缀只有一个层级。
+    """
+    base = directory / filename
+    if not base.exists():
+        return base
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    n = 1
+    while True:
+        cand = directory / f"{stem}_{n}{suffix}"
+        if not cand.exists():
+            return cand
+        n += 1
+
+
 # ---------------------------------------------------------------------------
 # 序列化（DB → 契约 Model）
 # ---------------------------------------------------------------------------
@@ -135,12 +154,45 @@ _DOWNLOAD_BY_STEM: dict[str, DownloadableModelSpec] = {
     Path(e.filename).stem: e for e in DOWNLOAD_CATALOG
 }
 
+# 转换产物尾缀（`X__from12`）与 `save_import` 的**防覆盖后缀**（`X` 撞名 → `X_1`）。
+# 两者都会让「文件名 stem」不再等于**来源名**，任何反查（目录条目 ↔ 模型）都必须穿透。
+_FROM_SUFFIX_RE = re.compile(r"__from\d+$", re.IGNORECASE)
+_DEDUP_SUFFIX_RE = re.compile(r"_\d+$")
+
+
+def normalized_stems(stem: str) -> list[str]:
+    """把一个文件名 stem 展开成**全部等价形态**（含剥离防覆盖后缀与转换尾缀）。
+
+    为什么需要它（2026-10-11 实测缺陷）：`save_import` 遇到同名文件会**改名**
+    （`X.pth` → `X_1.pth`，只防覆盖、绝不覆盖），于是 `Path(path).stem` 不再等于
+    来源文件名 stem。而目录反查（`download_service._existing_model`、「已下载」按钮态）
+    与简介反查（`_download_spec_for`）都按 stem **精确比对** → 一旦撞过名就**永久静默失配**：
+    已下载的条目在界面上继续显示「下载」，简介退回兜底文案「用户导入模型」。
+
+    ⚠️ **不能写成无条件的 `re.sub(r"_\\d+$", "", stem)`**：目录里有合法名
+    `2x_Ani4K_Compact_35000` —— 它本来就以 `_35000` 结尾，盲剥会把合法名削成
+    `2x_Ani4K_Compact`。故这里只**枚举候选形态**，由调用方拿**已知的来源 stem**
+    去命中，剥错也不会误判。
+    """
+    out: list[str] = []
+    cur = stem
+    for _ in range(4):  # 深度上限：转换尾缀 + 防覆盖后缀不会叠加更多层
+        if not cur or cur in out:
+            break
+        out.append(cur)
+        nxt = _FROM_SUFFIX_RE.sub("", cur)
+        if nxt == cur:
+            nxt = _DEDUP_SUFFIX_RE.sub("", cur)
+        cur = nxt
+    return out
+
 
 def _download_spec_for(m: Model) -> DownloadableModelSpec | None:
-    stem = Path(m.path).stem
-    if "__from" in stem:
-        stem = stem.split("__from", 1)[0]
-    return _DOWNLOAD_BY_STEM.get(stem)
+    for stem in normalized_stems(Path(m.path).stem):
+        spec = _DOWNLOAD_BY_STEM.get(stem)
+        if spec is not None:
+            return spec
+    return None
 
 # 导入模型的能力默认值（T-806 加载器到位后由真实元信息替换；已挂账）
 def default_capabilities(fmt: str) -> dict:
@@ -357,24 +409,49 @@ def save_import(
         )
 
     dest_dir = imported_dir()
-    dest = dest_dir / _safe_filename(primary_filename)
-    n = 1
-    while dest.exists():
-        dest = dest_dir / f"{dest.stem}_{n}{dest.suffix}"
-        n += 1
-    companion_dest: Path | None = None
-    if companion_tmp is not None and companion_filename:
-        companion_dest = dest.with_name(_safe_filename(companion_filename))
-        n = 1
-        while companion_dest.exists():
-            companion_dest = dest_dir / f"{Path(companion_dest.stem).stem}_{n}{companion_dest.suffix}"
-            n += 1
+    primary_name = _safe_filename(primary_filename)
+    companion_name = (
+        _safe_filename(companion_filename)
+        if (companion_tmp is not None and companion_filename)
+        else None
+    )
 
-    _move_into_place(primary_tmp, dest)
+    # 同名冲突的两种处置（**绝不覆盖**）：
+    # 1) 主/配套文件内容都一致 → **复用**。命中的是"登记被删、文件残留"的孤儿文件
+    #    （`delete_model` 只删登记不删磁盘文件）：重复下载同一权重不该再占一份盘，
+    #    而且复用能保住**规范文件名**，避免下游反查（见 `normalized_stems`）失配。
+    # 2) 其余情形 → 改名让路（`X_1`），绝不覆盖别人的文件。
+    dest = dest_dir / primary_name
+    companion_dest: Path | None = (dest_dir / companion_name) if companion_name else None
+    need_companion = rule["companion_ext"] is not None
+    same = False
+    if dest.is_file():
+        if need_companion:
+            same = bool(
+                companion_dest is not None
+                and companion_dest.is_file()
+                and combined_sha256(dest, companion_dest) == sha
+            )
+        else:
+            same = companion_name is None and combined_sha256(dest) == sha
+
+    if same:
+        logger.info("复用已有同内容文件（登记缺失但文件残留）：%s", dest.name)
+        primary_tmp.unlink(missing_ok=True)
+        if companion_tmp is not None:
+            companion_tmp.unlink(missing_ok=True)
+    else:
+        if dest.exists():
+            dest = _free_dest(dest_dir, primary_name)
+        if companion_dest is not None and companion_dest.exists():
+            companion_dest = _free_dest(dest_dir, companion_name)
+        _move_into_place(primary_tmp, dest)
+        if companion_tmp is not None and companion_dest is not None:
+            _move_into_place(companion_tmp, companion_dest)
+
     rel = dest.relative_to(models_dir()).as_posix()
     companion_rel = None
-    if companion_tmp is not None and companion_dest is not None:
-        _move_into_place(companion_tmp, companion_dest)
+    if companion_dest is not None:
         companion_rel = companion_dest.relative_to(models_dir()).as_posix()
 
     model = Model(

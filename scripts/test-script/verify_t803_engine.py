@@ -400,8 +400,15 @@ for expect, f, adopted in CASES:
 check("§6.2 判定表 8 组全部命中", ok, " | ".join(detail))
 
 t0, t0_label, t0_reason = caps_engine.derive_tier(_facts(8192), [])
-check("有卡但未验证 → 理由明确指出「未通过验证」（不静默降级）",
-      "未通过 EP 真实性验证" in t0_reason, f"reason={t0_reason}")
+# 2026-10-11：判据由匹配「未通过 EP 真实性验证」改为匹配**用户可见文案的实际措辞**。
+# `tier_reason` 是硬件能力页「判定依据」行的正文，已去掉内部术语（EP / provider 类名），
+# 但**「说明为什么不是 T1」这条产品约束不变** —— 断言的是约束，不是某句措辞。
+check("有卡但未验证 → 理由明确指出「未能确认加速生效」（不静默降级）",
+      "未能确认加速真正生效" in t0_reason, f"reason={t0_reason}")
+# 🔑 防回归：用户可见文案不得直出 ORT provider 类名（2026-10-11 曾泄漏 CUDAExecutionProvider）
+t1_reason = caps_engine.derive_tier(_facts(8192), ["CUDAExecutionProvider"])[2]
+check("tier_reason 不泄漏 ORT provider 类名", "ExecutionProvider" not in t1_reason, f"reason={t1_reason}")
+check("tier_reason 用规范名表述加速方式", "CUDA" in t1_reason, f"reason={t1_reason}")
 check("档位标签与档位对应", t0 == "T0" and t0_label.startswith("T0"))
 
 # 禁止按设备型号硬编码（ADR-004 原则 2 / project-rules §2.2 铁律 3）

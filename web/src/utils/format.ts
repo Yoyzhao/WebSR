@@ -10,7 +10,7 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
-import { TIMEZONE } from '@/constants'
+import { TIMEZONE, backendLabel } from '@/constants'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -58,11 +58,11 @@ export function formatParams(params: {
   const parts: string[] = []
   if (params.scale) parts.push(params.scale === 1 ? '×1 修复' : `×${params.scale}`)
   if (params.auto) {
-    parts.push('tile 自动', '精度自动', '后端自动')
+    parts.push('tile 自动', '精度自动', '加速方式自动')
   } else {
     if (params.tile !== null && params.tile !== undefined) parts.push(`tile ${params.tile}`)
     if (params.precision) parts.push(params.precision)
-    if (params.backend) parts.push(params.backend)
+    if (params.backend) parts.push(backendLabel(params.backend))
   }
   return parts.join(' · ')
 }

@@ -14,6 +14,7 @@ import { Picture, Download } from '@element-plus/icons-vue'
 import StatusText from './StatusText.vue'
 import type { Task } from '@/types/api'
 import { toTaskVM } from '@/utils/viewModel'
+import { UNAVAILABLE_COPY } from '@/constants'
 
 const props = defineProps<{
   task: Task
@@ -97,7 +98,7 @@ function onClickCard() {
         <!-- 区段三之三：中断原因（显式） -->
         <div v-if="vm.isInterrupted" class="tc-note tc-note-warn">
           <span class="tc-note-tag">中断</span>
-          <span class="tc-note-text">{{ vm.errorSuggestion || '进程重启导致任务中断；重试能力属 S2 阶段，暂不可用' }}</span>
+          <span class="tc-note-text">{{ vm.errorSuggestion || '程序重启或异常退出会导致任务中断，请重新提交任务' }}</span>
         </div>
       </div>
     </div>
@@ -105,13 +106,13 @@ function onClickCard() {
     <!-- 区段四：操作（阻止冒泡，避免误触发打开详情） -->
     <div v-if="!dense" class="tc-actions" @click.stop>
       <button v-if="vm.isRunning" type="button" class="tc-act" @click="emit('cancel', vm.id)">取消</button>
-      <!-- 重试属 S2；契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并标注 -->
+      <!-- 重试：契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并写明原因（04 §5） -->
       <button
         v-if="vm.isFailed || vm.isInterrupted || vm.status === 'canceled'"
         type="button"
         class="tc-act is-disabled"
         disabled
-        title="重试属 S2 阶段，尚未实现"
+        :title="UNAVAILABLE_COPY.retry"
       >
         重试
       </button>

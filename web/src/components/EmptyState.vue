@@ -67,7 +67,7 @@ withDefaults(
   line-height: var(--line-height-body);
 }
 .empty-state__title.is-lg {
-  font-size: var(--font-size-16);
+  font-size: var(--font-size-17);
   font-weight: 500;
   color: var(--Theme-text-primary);
 }

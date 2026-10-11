@@ -64,7 +64,7 @@ const simulationBannerText = computed(() => {
   const forced = system.capabilities?.simulation.force_tier ?? '—'
   // T-901：模拟是**服务端**行为（档位判定 / 模型门控 / 决策输入），
   // 文案必须说清「按模拟值执行」而不是只改显示，否则用户会误判结果可信度。
-  return `档位模拟已开启（服务端生效）· 目标 ${forced}（本机真实档位 ${system.realTierLabel}）· 档位判定与模型门控按模拟值执行，结果不代表真实性能`
+  return `档位模拟已开启 · 目标 ${forced}（本机真实档位 ${system.realTierLabel}）· 系统按模拟档位执行，处理结果不代表真实性能`
 })
 
 function go(path: string) {
@@ -173,7 +173,7 @@ onBeforeUnmount(() => {
 }
 
 .nd-name {
-  font-size: var(--font-size-16);
+  font-size: var(--font-size-17);
   font-weight: 600;
   color: var(--Theme-text-primary);
 }

@@ -11,6 +11,7 @@
  */
 import { describeError } from './errorMessages'
 import type {
+  CalibrationJobState,
   Capabilities,
   DownloadCatalog,
   DownloadState,
@@ -257,17 +258,20 @@ export async function fetchCapabilities(): Promise<Capabilities> {
 /**
  * 触发标定（异步，立即返回作业号）。
  * 阶段 C / T-805 已落地：结果会按「硬件指纹 + 模型」被引擎决策层消费。
+ *
+ * ⚠️ 返回只代表**作业已投递**，不代表标定完成——进度与结果要轮询
+ * `fetchCalibration()` 的 `state`（见 `stores/system.waitForCalibration`）。
  */
 export async function triggerCalibration(): Promise<{ started: boolean; task_id?: string; status?: string }> {
   return request('/system/calibrate', { method: 'POST' })
 }
 
-/** 标定记录与理由 */
+/** 标定记录、推荐档位与作业状态 */
 export async function fetchCalibration(): Promise<{
   records: Array<Record<string, unknown>>
   recommended_tier: string | null
   reasons: string[]
-  state: { status: string } & Record<string, unknown>
+  state: CalibrationJobState
 }> {
   return request('/system/calibration')
 }

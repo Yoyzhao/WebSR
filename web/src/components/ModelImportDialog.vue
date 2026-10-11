@@ -11,7 +11,7 @@
  *   - 输入格式只允许「四类入口」：`.onnx` 单文件 / `.xml + .bin` / `.param + .bin` / `.pth | .safetensors`
  *   - `.bin` 必须配套：`.xml`（OpenVINO）或 `.param`（ncnn），**按配套文件分派**，不靠扩展名猜
  *   - `.pth` / `.safetensors` 走**离线转换**（不捆绑 PyTorch）—— 界面必须明确告知
- *   - ncnn 标注「条件支持」
+ *   - ncnn 标注「实验性」
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { ElDialog, ElMessage } from 'element-plus'
@@ -47,7 +47,7 @@ const ENTRY_FORMATS: Array<{
   {
     value: 'onnx',
     label: 'ONNX',
-    hint: '单文件 .onnx，由本机 ORT / OpenVINO 直接加载',
+    hint: '单个 .onnx 文件，可直接加载使用',
     accept: '.onnx',
     pattern: [/\.onnx$/i],
     multi: false,
@@ -67,26 +67,26 @@ const ENTRY_FORMATS: Array<{
     accept: '.param,.bin',
     pattern: [/\.param$/i, /\.bin$/i],
     multi: true,
-    note: '条件支持：Windows 与 Python 环境下的可用性尚未验证，验证通过前不纳入正式支持范围',
+    note: '实验性支持：部分运行环境下的兼容性仍在验证，个别机器上可能无法运行',
     conditional: true,
   },
   {
     value: 'pth',
     label: 'PyTorch (.pth)',
-    hint: '应用不捆绑 PyTorch，导入后需在离线环境完成一次转换',
+    hint: '训练态权重，导入后需先完成一次格式转换',
     accept: '.pth',
     pattern: [/\.pth$/i],
     multi: false,
-    note: '需离线转换：请在你自备的 Python 环境中转出 .onnx，再以 ONNX 格式导入',
+    note: '需先转换：请将文件转换为 .onnx 格式后再导入',
   },
   {
     value: 'safetensors',
     label: 'Safetensors',
-    hint: '与 .pth 同属训练态权重，需离线转换',
+    hint: '与 .pth 同属训练态权重，需先完成格式转换',
     accept: '.safetensors',
     pattern: [/\.safetensors$/i],
     multi: false,
-    note: '需离线转换：请在你自备的 Python 环境中转出 .onnx，再以 ONNX 格式导入',
+    note: '需先转换：请将文件转换为 .onnx 格式后再导入',
   },
 ]
 
@@ -115,7 +115,7 @@ const BACKEND_OPTIONS = [
   { value: 'cuda', label: 'CUDA' },
   { value: 'openvino', label: 'OpenVINO' },
   { value: 'tensorrt', label: 'TensorRT' },
-  { value: 'ncnn', label: 'ncnn（条件支持）' },
+  { value: 'ncnn', label: 'ncnn（实验性）' },
 ]
 
 const fileError = ref('')
@@ -262,7 +262,7 @@ function submit() {
         >
           <div class="mi-format-head">
             <span class="mi-format-label">{{ f.label }}</span>
-            <span v-if="f.conditional" class="mi-format-flag">条件支持</span>
+            <span v-if="f.conditional" class="mi-format-flag">实验性</span>
           </div>
           <p class="mi-format-hint">{{ f.hint }}</p>
           <p v-if="f.note" class="mi-format-note">
@@ -436,7 +436,7 @@ function submit() {
 }
 
 .mi-format-flag {
-  font-size: var(--font-size-11);
+  font-size: var(--font-size-12);
   line-height: 15px;
   padding: 0 5px;
   border-radius: var(--Scale-radius-button);
@@ -583,7 +583,7 @@ function submit() {
   border: none;
   background: transparent;
   color: var(--Theme-text-tertiary);
-  font-size: var(--font-size-16);
+  font-size: var(--font-size-17);
   line-height: 1;
   cursor: pointer;
   padding: 0 3px;

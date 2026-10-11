@@ -222,6 +222,16 @@ def _run(job_id: str, reason: str) -> None:
                 outcome.simulated, outcome.cancelled, outcome.recommended_tile,
             )
 
+        # 🔴 结论落库后**必须作废能力快照**：它是进程内缓存，`using_fallback` /
+        #    `active_precision` 在构建那一刻就定了。不作废的话，用户点了「重新标定」、
+        #    标定也确实成功入库，硬件能力页却仍显示「当前使用保守参数」——
+        #    界面完全看不出标定发生了（实测反馈"点了没反应"）。
+        if stored:
+            try:
+                system_info.invalidate_capability_snapshot()
+            except Exception as exc:  # 作废失败不影响标定本身（下次冷启动仍会读到新记录）
+                logger.warning("能力快照作废失败（标定结论已入库，不影响正确性）：%s", exc)
+
         with _LOCK:
             _STATE.update(
                 status="completed" if outcome.is_storable() else "skipped",

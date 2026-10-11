@@ -39,6 +39,19 @@ OUTPUTS = ROOT / "data" / "outputs"
 BASE = "http://127.0.0.1:8000/api"
 TERMINAL = ("completed", "failed", "canceled", "interrupted")
 
+#: 本脚本全程使用的放大倍数（Bug-002）。
+#:
+#: 🔴 **为什么要有这个常量**：原先 `pick_model()` 只按 `min_vram_mb` 排序取首个、
+#:     **从不按 scale 过滤**，而 `create_task()` 把 `scale` 写死为 4。
+#:     T-717 起模型库补齐 ×1/×2/×3，「显存门槛最低」的那个恰好是 **×2** 模型
+#:     （`2xHFA2kAVCCompact`，门槛 1024 MB）→ 提交被后端前置校验拒绝：
+#:       `VALIDATION_ERROR`「…的放大倍数为 ×2，与请求的 ×4 不一致」
+#:     **后端行为完全正确**（T-706 引入的倍数前置校验在正常工作），错的是脚本假设
+#:     「库里总有一个 ×4 模型门槛最低」。
+#:
+#: 现在**选模型与提交共用同一个 SCALE**，从结构上杜绝二者再次漂移。
+SCALE = 4
+
 #: NFR：取消必须在 2 s 内生效
 CANCEL_DEADLINE_S = 2.0
 
@@ -130,11 +143,15 @@ def upload() -> str | None:
 
 
 def pick_model() -> tuple[str, str] | tuple[None, None]:
-    """挑一个**当前可用**、显存门槛最低的模型（不硬编码 mdl_N）。"""
+    """挑一个**当前可用、且倍率为 SCALE** 的模型中显存门槛最低者（不硬编码 mdl_N）。
+
+    ⚠️ `scale` 过滤是**必需**的，不是优化：模型的倍率是契约字段（契约 §3.2 `scale`），
+    而提交端的倍数校验会前置拒绝不匹配的组合（见 `SCALE` 常量的说明）。
+    """
     _, models = http("GET", "/models")
     if not isinstance(models, list):
         return None, None
-    usable = [m for m in models if m.get("available")]
+    usable = [m for m in models if m.get("available") and m.get("scale") == SCALE]
     if not usable:
         return None, None
     usable.sort(key=lambda m: (m.get("min_vram_mb") or 0, m["id"]))
@@ -142,7 +159,7 @@ def pick_model() -> tuple[str, str] | tuple[None, None]:
 
 
 def create_task(file_id: str, model_id: str, *, auto: bool = True, tile: int | None = None,
-                scale: int = 4):
+                scale: int = SCALE):
     return http("POST", "/tasks", json.dumps({
         "type": "upscale", "file_id": file_id,
         "params": {"scale": scale, "model_id": model_id, "tile": tile,
@@ -203,8 +220,18 @@ def main() -> int:
     file_id = upload()
     model_id, model_name = pick_model()
     check("上传夹具成功", bool(file_id), str(file_id))
-    check("取得可用模型（从 /api/models 推导，不硬编码）", bool(model_id), f"{model_id} {model_name}")
+    check(f"取得 ×{SCALE} 可用模型（从 /api/models 推导，不硬编码）", bool(model_id), f"{model_id} {model_name}")
     if not file_id or not model_id:
+        # 自诊断：把「库里到底有哪些倍率可用」打出来，否则只报"准备失败"无从下手
+        _, models = http("GET", "/models")
+        inv: dict = {}
+        for m in models if isinstance(models, list) else []:
+            inv.setdefault(m.get("scale"), [0, 0])
+            inv[m.get("scale")][0] += 1
+            if m.get("available"):
+                inv[m.get("scale")][1] += 1
+        print(f"  库存按倍率（总数/可用）：{ {k: f'{v[0]}/{v[1]}' for k, v in sorted(inv.items(), key=lambda x: str(x[0]))} }")
+        print(f"  ⚠ 本脚本固定使用 ×{SCALE}；若该倍率无可用模型，属**环境数据不足**，请先导入对应倍率模型或改 SCALE")
         print("\n准备失败，脚本中止")
         return 2
 

@@ -51,7 +51,7 @@ const themeTip = computed(() =>
 const tierBadge = computed(() => system.tierBadgeText)
 const tierTip = computed(() =>
   system.simulating
-    ? `档位模拟已开启（服务端生效）：档位判定、模型门控与任务决策都按声明的档位执行。执行结果不代表真实性能。`
+    ? `档位模拟已开启：系统按声明的档位执行，处理结果不代表真实性能。`
     : `当前硬件档位：${system.tierLabel}`,
 )
 
@@ -109,11 +109,30 @@ function go(path: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 0 20px;
-  background: var(--Theme-bg-panel);
+  gap: var(--Scale-space-4);
+  padding: 0 var(--Scale-space-5);
+  position: relative;
+  background-color: var(--Theme-bg-panel);
+  background-image: var(--Theme-sheen-panel);
   border-bottom: 1px solid var(--Theme-border-subtle);
   /* 禁止事项第 6 条：常规卡片/容器不加阴影 */
+}
+
+/* 顶栏下沿的品牌色细线：强化「顶栏浮于内容之上」的层次，替代阴影 */
+.topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--Theme-primary) 55%, transparent) 0%,
+    color-mix(in srgb, var(--Theme-primary) 12%, transparent) 42%,
+    transparent 78%
+  );
+  pointer-events: none;
 }
 
 .tb-left {
@@ -127,8 +146,8 @@ function go(path: string) {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: var(--layout-control-height);
+  height: var(--layout-control-height);
   border: 1px solid var(--Theme-border-subtle);
   border-radius: var(--Scale-radius-button);
   background: transparent;
@@ -154,18 +173,23 @@ function go(path: string) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--Scale-radius-button);
-  background: var(--Theme-primary);
+  /* 品牌标识用主色渐变：全站唯一允许出现渐变的位置，起点级别的视觉锚点 */
+  background: linear-gradient(
+    145deg,
+    var(--Theme-primary-hover) 0%,
+    var(--Theme-primary) 62%
+  );
   color: var(--Theme-on-primary);
-  font-size: var(--font-size-12);
+  font-size: var(--font-size-13);
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 
 .tb-name {
-  font-size: var(--font-size-16);
+  font-size: var(--font-size-17);
   font-weight: 600;
   color: var(--Theme-text-primary);
   letter-spacing: -0.01em;
@@ -174,27 +198,28 @@ function go(path: string) {
 .tb-nav {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--Scale-space-1);
   flex: 1;
   min-width: 0;
   overflow: hidden;
 }
 
 .tb-link {
+  position: relative;
   appearance: none;
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: var(--font-size-14);
-  line-height: 20px;
+  font-size: var(--font-size-15);
+  line-height: 22px;
   color: var(--Theme-text-secondary);
-  padding: 6px 12px;
+  padding: var(--Scale-space-2) var(--Scale-space-3);
   border-radius: var(--Scale-radius-button);
   cursor: pointer;
   white-space: nowrap;
   transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
 }
 
 .tb-link:hover {
@@ -202,10 +227,24 @@ function go(path: string) {
   background: var(--Theme-bg-hover);
 }
 
+/* 激活态：底色 + 顶部下沿的强调条。
+ * 用「下沿横条」而非左侧竖条 —— 顶栏是水平导航，横条与其走向一致，
+ * 比竖条更贴合阅读方向（竖条是侧边导航的惯例）。 */
 .tb-link.is-active {
   color: var(--Theme-primary);
   font-weight: 500;
-  background: color-mix(in srgb, var(--Theme-primary) 10%, transparent);
+  background: color-mix(in srgb, var(--Theme-primary) 12%, transparent);
+}
+
+.tb-link.is-active::after {
+  content: '';
+  position: absolute;
+  left: var(--Scale-space-3);
+  right: var(--Scale-space-3);
+  bottom: -1px;
+  height: 2px;
+  border-radius: var(--Scale-radius-pill);
+  background: var(--Theme-primary);
 }
 
 .tb-right {
@@ -219,15 +258,15 @@ function go(path: string) {
 .tb-tier {
   display: inline-flex;
   align-items: center;
-  height: 24px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 var(--Scale-space-3);
   border: 1px solid var(--Theme-border-subtle);
   border-radius: var(--Scale-radius-pill);
   background: var(--Theme-bg-elevated);
   color: var(--Theme-text-secondary);
   font-family: var(--font-mono);
-  font-size: var(--font-size-12);
-  line-height: 16px;
+  font-size: var(--font-size-13);
+  line-height: 18px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -242,21 +281,23 @@ function go(path: string) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: var(--layout-control-height);
+  height: var(--layout-control-height);
   border: 1px solid var(--Theme-border-subtle);
   border-radius: var(--Scale-radius-button);
   background: transparent;
   color: var(--Theme-text-secondary);
   cursor: pointer;
   transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
 }
 
 .tb-icon-btn:hover {
   color: var(--Theme-text-primary);
   background: var(--Theme-bg-hover);
+  border-color: var(--Theme-border-strong);
 }
 
 .tb-icon-btn:focus-visible,

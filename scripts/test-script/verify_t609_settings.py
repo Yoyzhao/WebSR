@@ -60,6 +60,10 @@ EXPECTED_KEYS = {
     "data_root", "model_dir", "task_retention_days", "max_upload_mb",
     "max_concurrency", "log_level", "simulation_enabled", "calibration_state",
     "force_tier", "force_vram_mb", "force_has_tensorrt",
+    # `download_proxy`（T-714 模型下载代理）：此前加入 `settings_store._SPECS` 时
+    # **漏改本清单**，导致这条断言长期红灯。2026-10-11 定位并补齐。
+    # ⚠️ 本清单必须与 `settings_store._SPECS` 同源维护 —— 键增删时两处都要改。
+    "download_proxy",
 }
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -77,11 +81,24 @@ with TestClient(app) as client:
     items = r.json()
     check("响应为裸数组（与前端已定稿类型一致）", isinstance(items, list))
     by_key = {i["key"]: i for i in items}
-    check(f"键集合完整（{len(EXPECTED_KEYS)} 项）", set(by_key) == EXPECTED_KEYS, f"actual={sorted(by_key)}")
+    # 失败时直接给出**对称差**，省掉"到底是多了还是少了"的二次推理
+    # （2026-10-11：`download_proxy` 漏登记时，只打印 actual 列表不易看出缺哪一项）。
+    _missing = sorted(EXPECTED_KEYS - set(by_key))
+    _extra = sorted(set(by_key) - EXPECTED_KEYS)
+    check(f"键集合完整（{len(EXPECTED_KEYS)} 项）", set(by_key) == EXPECTED_KEYS,
+          f"缺={_missing or '无'} 多={_extra or '无'}")
     check("顺序固定（声明顺序，非隐式）", [i["key"] for i in items][0] == "data_root")
     check("type 字段齐全", all(i["type"] in ("string", "number", "boolean") for i in items))
     check("max_concurrency 默认 1（保底档）", by_key["max_concurrency"]["value"] == "1")
     check("calibration_state 默认 pending（S2 前）", by_key["calibration_state"]["value"] == "pending")
+    # 🔴 2026-10-11：`effective()` 原先**不走只读派生**，对 `calibration_state` 恒返回
+    #    声明默认值 `"pending"`，而 `list_settings()` 走 `_readonly_value` 返回真实状态
+    #    —— 同一件事两个相反结论。`build_diagnostics()` 正是踩过：诊断 JSON 的
+    #    `calibration.state` 永远说"未完成"（哪怕本机已标定）。
+    check("只读派生键的两个读口径一致（effective 与配置清单同值）",
+          settings_store.effective("calibration_state") == by_key["calibration_state"]["value"],
+          f"effective={settings_store.effective('calibration_state')} "
+          f"list={by_key['calibration_state']['value']}")
     check("model_dir 由数据根派生", by_key["model_dir"]["value"].endswith("/models")
           or by_key["model_dir"]["value"].endswith("\\models"),
           f"actual={by_key['model_dir']['value']}")

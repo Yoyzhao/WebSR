@@ -17,6 +17,22 @@
   --Theme-bg-elevated: #242424;
   --Theme-bg-hover: #292929;
 
+  /* ---- 材质微光（2026-10-11 新增）----
+   * 用极低透明度渐变模拟「表面受顶部光源照射」，替代阴影建立质感。
+   * ⚠️ 刻意不用 box-shadow：03 §5 禁止事项第 6 条明令「常规卡片不加阴影」。 */
+  --Theme-sheen-panel: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.05) 0%,
+    rgba(255, 255, 255, 0.014) 44%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  --Theme-sheen-app: radial-gradient(
+    118% 62% at 50% -14%,
+    rgba(0, 120, 212, 0.11) 0%,
+    rgba(0, 120, 212, 0.035) 40%,
+    rgba(0, 120, 212, 0) 74%
+  );
+
   /* ---- 边框 ---- */
   --Theme-border-subtle: #2e2e2e;
   --Theme-border-strong: #3d3d3d;
@@ -40,10 +56,11 @@
    * 保证在 --Theme-primary 底上的对比度 ≥ 4.5:1（深 4.4:1 / 浅 5.6:1）。 */
   --Theme-on-primary: #0f0d0d;
 
-  /* ---- 尺寸 ---- */
-  --Scale-radius-card: 8px;
-  --Scale-radius-inner: 6px;
-  --Scale-radius-button: 4px;
+  /* ---- 尺寸 ----
+   * 圆角 2026-10-11 上调（8/6/4 → 10/7/6）：原取值偏方正，是「生硬感」主因之一。 */
+  --Scale-radius-card: 10px;
+  --Scale-radius-inner: 7px;
+  --Scale-radius-button: 6px;
   --Scale-radius-pill: 999px;
   --Scale-space-1: 4px;
   --Scale-space-2: 8px;
@@ -51,6 +68,11 @@
   --Scale-space-4: 16px;
   --Scale-space-5: 24px;
   --Scale-space-6: 32px;
+
+  /* ---- 动效（2026-10-11 新增）：统一过渡节奏，消除瞬时跳变的生硬感 ---- */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-ease: cubic-bezier(0.32, 0.72, 0.28, 1);
 
   /* ---- 字体族 ----
    * Inter 与 JetBrains Mono 为**自托管拉丁子集**（见 styles/fonts.css，合计 86 KB）。
@@ -62,24 +84,25 @@
   --font-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
 
-  /* ---- 字号层级（工具型界面，整体偏小、信息密度高） ----
-   * 2026-10-08 整体上调一档，补偿 2K 分辨率下的像素密度：
-   *   原 10 / 11 / 12 / 13 / 15 / 18 / 24  →  现 11 / 12 / 13 / 14 / 16 / 20 / 26
+  /* ---- 字号层级 ----
+   * 历史：2026-10-08 上调一档（补偿 2K 像素密度）；
+   *       2026-10-11 再次上调一档（用户反馈「字体还是偏小」）。
+   *   原 10/11/12/13/15/18/24 → 11/12/13/14/16/20/26 → 12/13/14/15/17/21/28
    * 采用**重新编号**而非"改值不改名"：token 名始终等于像素值，
    * 避免出现 `--font-size-12: 13px` 这种名不符实的隐患。
    * ⚠️ 组件内一律引用 token，禁止硬编码 font-size（否则调整不生效）。 */
-  --font-size-11: 11px; /* 格式徽标 */
-  --font-size-12: 12px; /* 表格单元格、元信息、辅助说明 */
-  --font-size-13: 13px; /* 主要正文、按钮、表单标签 */
-  --font-size-14: 14px; /* 面板标题、卡片标题、输入值 */
-  --font-size-16: 16px; /* 品牌名、空态主文案 */
-  --font-size-20: 20px; /* 独立页标题 */
-  --font-size-26: 26px; /* 档位大徽标（唯一的大字号） */
+  --font-size-12: 12px; /* 格式徽标、最小辅助字 */
+  --font-size-13: 13px; /* 表格单元格、元信息、辅助说明 */
+  --font-size-14: 14px; /* 主要正文、按钮、表单标签 */
+  --font-size-15: 15px; /* 面板标题、卡片标题、输入值 */
+  --font-size-17: 17px; /* 品牌名、空态主文案 */
+  --font-size-21: 21px; /* 独立页标题 */
+  --font-size-28: 28px; /* 档位大徽标（唯一的大字号） */
 
   /* ---- 行高 ---- */
   --line-height-tight: 1.3;
-  --line-height-body: 1.45;
-  --line-height-relaxed: 1.55;
+  --line-height-body: 1.5;
+  --line-height-relaxed: 1.6;
 
   /* ---- 图标 ---- */
   --icon-stroke: 1.8;
@@ -90,16 +113,16 @@
   --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.2);
 
   /* ---- 布局固定尺寸 ----
-   * 2026-10-08 随字阶同步上调：字号 +1 档后，原行高与控件高度会显得拥挤。
-   *   顶栏 56→60 ｜ 表格行 48→52 ｜ 输入框 36→40 ｜ 图标按钮 32→36
-   * 面板宽度保持不变 —— 加宽会直接挤占工作台中栏的图像预览面积。 */
-  --layout-topbar-height: 60px;
+   * 随字阶两次同步上调：字号 +2 档后，原行高与控件高度会显得拥挤。
+   *   顶栏 56→60→64 ｜ 表格行 48→52→56 ｜ 输入框 36→40→42 ｜ 图标按钮 32→36→38
+   * 工作台左右面板宽度保持不变 —— 加宽会直接挤占中栏的图像预览面积。 */
+  --layout-topbar-height: 64px;
   --layout-left-panel-width: 320px;
   --layout-left-panel-width-compact: 300px;
   --layout-right-panel-width: 340px;
-  --layout-row-height: 52px;
-  --layout-field-height: 40px;
-  --layout-control-height: 36px;
+  --layout-row-height: 56px;
+  --layout-field-height: 42px;
+  --layout-control-height: 38px;
 }
 
 /* ============================================================================
@@ -129,4 +152,19 @@
   --Theme-error: #c42b1c;
 
   --Theme-on-primary: #ffffff;
+
+  /* 浅色下的微光必须反向取值：深色用白色叠加模拟受光，
+   * 浅色需用极淡暗部叠加，否则白底上完全看不出层次。 */
+  --Theme-sheen-panel: linear-gradient(
+    180deg,
+    rgba(15, 13, 13, 0.018) 0%,
+    rgba(15, 13, 13, 0.004) 44%,
+    rgba(15, 13, 13, 0) 100%
+  );
+  --Theme-sheen-app: radial-gradient(
+    118% 62% at 50% -14%,
+    rgba(0, 102, 191, 0.055) 0%,
+    rgba(0, 102, 191, 0.018) 40%,
+    rgba(0, 102, 191, 0) 74%
+  );
 }

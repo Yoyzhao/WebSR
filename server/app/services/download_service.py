@@ -84,13 +84,19 @@ def _state_locked() -> dict:
 
 
 def _existing_model(session, entry: DownloadableModelSpec) -> Model | None:
-    """该条目是否已下载登记过（幂等：同一权重只登记一次）。"""
-    stem = Path(entry.filename).stem
+    """该条目是否已下载登记过（幂等：同一权重只登记一次）。
+
+    ⚠️ **不能做 stem 精确比对**（2026-10-11 实测缺陷）：`save_import` 遇到同名文件会
+    改名 `X.pth` → `X_1.pth`（只防覆盖）。此时 `Path(model.path).stem` 变为 `X_1`，
+    精确比对**永久失配** → 目录里已下载的条目继续显示「下载」，且**每次点击都会重复下载**。
+    故用 `normalized_stems` 穿透防覆盖后缀 / 转换尾缀后再与来源 stem 比对。
+    """
+    target = Path(entry.filename).stem  # 来源 stem 是**权威**，只拿它去命中候选形态
     rows = session.scalars(
         select(Model).where(Model.format == "pth", Model.source == "imported")
     ).all()
     for r in rows:
-        if Path(r.path).stem == stem:
+        if target in reg.normalized_stems(Path(r.path).stem):
             if reg._abs(r.path).is_file():
                 return r
     return None

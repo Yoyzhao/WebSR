@@ -12,7 +12,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Warning, InfoFilled } from '@element-plus/icons-vue'
+import { Warning, InfoFilled, Refresh } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionCard from '@/components/SectionCard.vue'
 import SettingsRow from '@/components/SettingsRow.vue'
@@ -21,7 +21,7 @@ import ActionButtons from '@/components/ActionButtons.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import SegmentedControl from '@/components/SegmentedControl.vue'
 import { useSystemStore } from '@/stores/system'
-import { PAGE_MAX_WIDTH } from '@/constants'
+import { PAGE_MAX_WIDTH, backendLabel } from '@/constants'
 import type { Capabilities } from '@/types/api'
 
 const system = useSystemStore()
@@ -46,19 +46,33 @@ const hasVerifiedGpu = computed(() =>
 /** 当前生效路径的判据说明（用真实证据算，不写死文案） */
 const activeReason = computed(() => {
   const gpu = evidence.value.find((e) => e.verified && e.cpu_node_count === 0 && !e.provider.includes('CPU'))
-  if (gpu) return `${gpu.provider} 已生效（该提供器节点数 ${gpu.node_count}，CPU 节点数 ${gpu.cpu_node_count}）`
-  return '未检测到已验证的 GPU 后端 —— 当前走 CPU 路径'
+  if (gpu) return `${backendLabel(gpu.provider)} 已生效（运算节点 ${gpu.node_count} 个，无运算落在 CPU 上）`
+  return '未检测到可用的 GPU 加速方式 —— 当前使用 CPU 处理'
 })
 
 async function runCalibration() {
   calibrating.value = true
   try {
-    await system.calibrate()
-    // 阶段 C（T-805）已落地：标定不再是 S2 占位能力，结果会被引擎决策层按
-    // 「硬件指纹 + 模型」自动消费。
-    // ⚠️ 本页目前**没有**标定结果区块（原型 P4 未定义该区块）；
-    //    故文案不得宣称"可在此查看曲线"——那会是一句骗人的话。
-    ElMessage.success('标定已触发；完成后「自动档」将按本机实测结果取值')
+    const { jobId } = await system.calibrate()
+    // 🔴 标定是**异步作业**（吃满 GPU 数秒～数十秒）：`POST` 只投递就返回。
+    //    此前这里发完 POST 就结束 —— 界面既不显示进度、也不刷新能力快照，
+    //    用户看到的就是「点了重新标定没反应」（实测反馈）。现在等到终态再刷新。
+    const st = await system.waitForCalibration(jobId)
+    // 标定结论按「探针模型 + 硬件指纹」被引擎消费；刷新能力快照后，
+    // 横幅与「参数来源」才会即时反映结果（不必整页刷新）。
+    await system.load()
+    if (st === null) {
+      ElMessage.warning('标定仍在进行，完成后本页「参数来源」会自动切换为实测取值')
+    } else if (st.status === 'completed' && st.stored) {
+      const tile = st.outcome?.recommended_tile
+      ElMessage.success(`标定完成：已按本机实测结果更新参数${tile ? `（推荐块尺寸 ${tile}）` : ''}`)
+    } else if (st.status === 'skipped') {
+      ElMessage.warning(`标定结论未采纳：${st.skipped_reason || '未产生可入库的结果'}，仍按保守取值运行`)
+    } else {
+      ElMessage.error(`标定失败：${st.error || '未知错误'}，仍按保守取值运行`)
+    }
+  } catch (e) {
+    ElMessage.error((e as Error).message || '标定触发失败')
   } finally {
     calibrating.value = false
   }
@@ -101,8 +115,9 @@ async function toggleSimulation(next: boolean) {
   if (next) {
     try {
       await ElMessageBox.confirm(
-        '档位模拟会让「服务端」按声明的档位 / 显存执行：档位判定、模型可用性门控、' +
-          'EP 候选链与任务决策都会走模拟值。模拟期间执行结果不代表真实性能，仅用于验证代码分支。确认开启？',
+        '开启后，系统将按你声明的档位与可用显存来判断硬件能力：档位判定、模型可用性、' +
+          '加速方式选择与任务参数都按声明值执行。模拟期间的执行结果不代表真实性能，' +
+          '仅用于验证不同硬件条件下的表现。请确认开启？',
         '开启档位模拟',
         { confirmButtonText: '确认开启', cancelButtonText: '取消', type: 'warning' },
       )
@@ -110,7 +125,7 @@ async function toggleSimulation(next: boolean) {
       return // 用户取消：什么都不做（控件状态由服务端返回值决定，本就未变）
     }
     await submitSimulation(true)
-    ElMessage.warning(`档位模拟已开启（服务端生效）：目标 ${simForceTier.value}`)
+    ElMessage.warning(`档位模拟已开启：目标 ${simForceTier.value}`)
   } else {
     await submitSimulation(false)
     ElMessage.success('已关闭档位模拟，恢复真实探测值')
@@ -140,7 +155,7 @@ onMounted(async () => {
 
 <template>
   <div class="hw-page" :style="{ maxWidth: PAGE_MAX_WIDTH.hardware + 'px' }">
-    <PageHeader title="硬件能力" subtitle="本机硬件事实、执行提供器验证证据与档位模拟">
+    <PageHeader title="硬件能力" subtitle="本机硬件信息、加速方式验证结果与档位模拟">
       <template #actions>
         <ActionButtons
           :actions="[{ key: 'calibrate', label: calibrating ? '标定中…' : '重新标定', disabled: calibrating }]"
@@ -164,18 +179,18 @@ onMounted(async () => {
       <SectionCard title="硬件档位" :subtitle="caps.tier_label">
         <SettingsRow label="当前档位" :value="caps.tier" mono />
         <SettingsRow label="判定依据" :value="caps.tier_reason" />
-        <SettingsRow label="实际生效后端" :value="caps.active_backend" mono tone="success" />
+        <SettingsRow label="实际生效加速方式" :value="backendLabel(caps.active_backend)" mono tone="success" />
         <SettingsRow label="实际生效精度" :value="caps.active_precision" mono />
         <SettingsRow
           label="参数来源"
-          :value="caps.using_fallback ? '保底档（保守下界参数）' : '首启自标定实测值'"
+          :value="caps.using_fallback ? '保守取值（未标定）' : '本机标定实测值'"
           :tone="caps.using_fallback ? 'warning' : 'success'"
         />
         <SettingsRow label="当前路径判据" :value="activeReason" />
       </SectionCard>
 
       <!-- 设备事实 -->
-      <SectionCard v-if="facts" title="设备信息" subtitle="显存取实读可用值，非标称值">
+      <SectionCard v-if="facts" title="设备信息" subtitle="可用显存为实时读取值，非标称容量">
         <SettingsRow label="CPU" :value="facts.cpu" />
         <SettingsRow label="GPU" :value="facts.gpu" />
         <SettingsRow label="驱动版本" :value="facts.driver" mono />
@@ -194,11 +209,11 @@ onMounted(async () => {
         />
       </SectionCard>
 
-      <!-- EP 证据 -->
-      <SectionCard title="执行提供器验证证据">
+      <!-- 加速方式验证 -->
+      <SectionCard title="加速方式验证">
         <template #actions>
           <el-tooltip
-            content="判据：目标 EP 节点数 > 0 且 CPU 节点数 = 0。节点数为 1 属整图融合的正常现象，不能只凭节点数判断。"
+            content="用于确认加速是否真正生效：需该方式的运算节点数大于 0，且没有运算落在 CPU 上。节点数为 1 通常表示整图合并计算，属正常现象。"
             placement="top"
           >
             <el-icon :size="14" class="hw-flag"><InfoFilled /></el-icon>
@@ -208,17 +223,17 @@ onMounted(async () => {
         <table class="hw-table">
           <thead>
             <tr>
-              <th>执行提供器</th>
-              <th class="hw-num">节点数</th>
+              <th>加速方式</th>
+              <th class="hw-num">运算节点</th>
               <th class="hw-num">CPU 节点</th>
-              <th>判定</th>
+              <th>结论</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="e in evidence" :key="e.provider">
               <td>
                 <div class="hw-prov">
-                  <span class="hw-mono">{{ e.provider }}</span>
+                  <span class="hw-mono">{{ backendLabel(e.provider) }}</span>
                   <span class="hw-prov-note">{{ e.node_ownership }}</span>
                 </div>
               </td>
@@ -226,7 +241,7 @@ onMounted(async () => {
               <td class="hw-num hw-mono">{{ e.cpu_node_count }}</td>
               <td>
                 <span class="hw-verdict" :class="e.verified ? 'is-ok' : 'is-idle'">
-                  {{ e.verified ? '已生效' : '未参与' }}
+                  {{ e.verified ? '已生效' : '未使用' }}
                 </span>
               </td>
             </tr>
@@ -234,46 +249,46 @@ onMounted(async () => {
         </table>
         <p v-if="!hasVerifiedGpu" class="hw-warn">
           <el-icon :size="12"><Warning /></el-icon>
-          尚未检测到「CPU 节点数为 0」的 GPU 后端，当前实际走 CPU 路径。
+          尚未检测到可用的 GPU 加速方式，当前使用 CPU 处理，处理大图会较慢。
         </p>
         <ul class="hw-notes">
           <li v-for="(e, i) in evidence" :key="i">{{ e.note }}</li>
         </ul>
       </SectionCard>
 
-      <!-- 可用后端 -->
-      <SectionCard title="可用后端" subtitle="按能力声明给出，不按设备型号硬编码">
+      <!-- 可用加速方式 -->
+      <SectionCard title="可用加速方式" subtitle="依据实测能力给出，不按显卡型号预设">
         <div class="hw-be-list">
           <div v-for="b in backends" :key="b.id" class="hw-be" :class="{ 'is-idle': !b.verified }">
             <div class="hw-be-head">
-              <span class="hw-be-id hw-mono">{{ b.label }}</span>
+              <span class="hw-be-id hw-mono">{{ backendLabel(b.label) }}</span>
               <span class="hw-verdict" :class="b.verified ? 'is-ok' : 'is-idle'">
                 {{ b.verified ? '可用' : '不可用' }}
               </span>
             </div>
             <div class="hw-be-meta hw-mono">
-              精度 {{ b.precision }} · 节点 {{ b.node_count }} · CPU 节点 {{ b.cpu_node_count }}
+              精度 {{ b.precision }} · 运算节点 {{ b.node_count }} · CPU 节点 {{ b.cpu_node_count }}
             </div>
           </div>
         </div>
       </SectionCard>
 
       <!-- 档位模拟 -->
-      <SectionCard title="档位模拟" subtitle="开发期能力 · P3 · 服务端生效">
+      <SectionCard title="档位模拟" subtitle="用于在其他硬件条件下预览效果，不影响本机实测信息">
         <div class="hw-sim-warn">
           <el-icon :size="13"><Warning /></el-icon>
           <div>
             <p class="hw-sim-msg">
-              模拟由服务端执行：档位判定、模型可用性门控、EP 候选链与任务决策输入都会按声明的档位 / 显存走。
+              开启后，系统将按你声明的档位与可用显存来判断硬件能力，并据此决定模型可用性、加速方式与处理参数。
             </p>
             <p class="hw-sim-sub">
-              它只覆盖「判定输入」，不伪造硬件事实——本页设备信息恒为真实探测值；
-              执行结果不代表真实性能，请勿用于评估硬件。同样的开关也在「系统配置」页。
+              它只影响「能力判定」，不会修改本机探测到的设备信息；模拟期间的执行结果不代表真实性能，
+              请勿用于评估硬件。相同的开关也可在「系统配置」页使用。
             </p>
           </div>
         </div>
 
-        <SettingsRow label="模拟开关" :hint="system.simulating ? '当前处于模拟态（服务端已生效）' : '当前为真实探测值'">
+        <SettingsRow label="模拟开关" :hint="system.simulating ? '当前处于模拟状态' : '当前使用本机实测值'">
           <SegmentedControl
             :model-value="system.simulating ? 'on' : 'off'"
             :options="[
@@ -285,7 +300,7 @@ onMounted(async () => {
           />
         </SettingsRow>
 
-        <SettingsRow label="目标档位" hint="T0 纯 CPU / T1 消费级 8G / T2 高端 16–24G / T3 专业卡">
+        <SettingsRow label="目标档位" hint="T0 仅 CPU ｜ T1 入门独显 8G ｜ T2 高端独显 16–24G ｜ T3 专业显卡">
           <SegmentedControl
             :model-value="simForceTier"
             :options="[
@@ -314,7 +329,7 @@ onMounted(async () => {
           />
         </SettingsRow>
 
-        <SettingsRow label="TensorRT 能力" hint="把 TensorRT 加入 EP 候选链（其消费方为 G-04 / T-909）">
+        <SettingsRow label="TensorRT 支持" hint="将 TensorRT 纳入加速方式候选列表">
           <SegmentedControl
             :model-value="simTensorrt"
             :options="[
@@ -333,7 +348,7 @@ onMounted(async () => {
           <SettingsRow
             label="本机真实档位"
             :value="system.realTierLabel"
-            hint="模拟值不得冒充真实档位——该值恒由真实硬件事实推导"
+            hint="模拟值不会覆盖真实档位——本机真实档位恒由实测硬件信息推导"
           />
         </template>
       </SectionCard>
@@ -345,8 +360,8 @@ onMounted(async () => {
 .hw-page {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 24px 28px 40px;
+  gap: var(--Scale-space-5);
+  padding: var(--Scale-space-5) var(--Scale-space-6) 40px;
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;

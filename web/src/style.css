@@ -23,12 +23,31 @@ body,
 body {
   font-family: var(--font-sans);
   font-size: var(--font-size-14);
-  line-height: 1.45;
+  /* 此前硬编码 1.45，字号调整后不会跟随 —— 违反「字号/行高一律走 token」 */
+  line-height: var(--line-height-body);
   color: var(--Theme-text-primary);
   background: var(--Theme-bg-app);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* ============================================================================
+ * 交互元素的基础过渡（2026-10-11）
+ *
+ * 目标：消除「生硬感」的另一半来源 —— 悬停/聚焦时的瞬时跳变。
+ * 只作用于**颜色、边框、背景**三类属性，不碰 transform / width 等会触发布局的
+ * 属性，避免 `transition: all` 常见的重排开销。
+ * ========================================================================== */
+a,
+button,
+input,
+select,
+textarea {
+  transition:
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
 }
 
 h1,
@@ -74,7 +93,20 @@ a {
 /* 焦点可见性：键盘用户必须能看到焦点（04 §7 无障碍） */
 :focus-visible {
   outline: 2px solid var(--Theme-primary);
-  outline-offset: 1px;
+  outline-offset: 2px;
+  border-radius: var(--Scale-radius-button);
+}
+
+/* ============================================================================
+ * 应用底：顶部微光
+ *
+ * 用一层极淡的品牌色径向渐变代替纯色平铺，消除大面积纯色的「呆板」。
+ * 渐变叠在 bg-app 之上，故浅色模式下同样成立（浅色取值见 tokens.css）。
+ * ========================================================================== */
+#app {
+  background-image: var(--Theme-sheen-app);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
 /* ============================================================================
@@ -102,5 +134,11 @@ a {
   --el-border-color-lighter: var(--Theme-border-subtle);
   --el-fill-color-blank: var(--Theme-bg-panel);
   --el-border-radius-base: var(--Scale-radius-button);
+  /* EP 字号跟随 tokens.css 的字阶（2026-10-11 第二次上调：11/12/13/14 → 12/13/14/15）。
+   * base 对应「主要正文 / 按钮」档。此前 base 取 14px 而业务正文档为 13px，
+   * EP 组件（弹窗、按钮、下拉）比业务界面偏大 1px；本轮起两者同为 14px，跨库更协调。 */
   --el-font-size-base: var(--font-size-14);
+  --el-font-size-extra-small: var(--font-size-12);
+  --el-font-size-small: var(--font-size-13);
+  --el-font-size-large: var(--font-size-15);
 }

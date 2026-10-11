@@ -11,9 +11,9 @@
 这样"探测来源"换实现时（例如将来加 Intel 路径）本模块无需改动。
 
 **保底语义**：阶段 C（自标定）**已落地**（T-805）。本模块的 `using_fallback` 是
-**快照口径**（按"通用记录"取数）—— 无通用标定记录时为 true，`active_precision` 随之为
-保底档取值（§6.8）；**任务级**口径以 `resolved.source` 为准。诊断 JSON 满足"一键导出即可
-解释为什么他慢/崩"（跨环境设计文档 §9）。
+**快照口径** —— 按「**探针模型** × 硬件指纹」取标定记录（`read_snapshot_calibration`），
+命中即 `false` 且 `active_precision` 取标定结论（§6.8 的"自动档基线"）；**任务级**口径
+以 `resolved.source` 为准。诊断 JSON 满足"一键导出即可解释为什么他慢/崩"（跨环境设计文档 §9）。
 """
 from __future__ import annotations
 
@@ -60,6 +60,9 @@ def read_calibration_view(
     匹配规则：先精确匹配 `model_id`，再退到"通用记录"（`model_id is NULL`）。
     **指纹不符的完全不看**——失效判据是硬件指纹，不是时间（与 EP 缓存同一纪律）。
     取不到匹配记录时返回 None → 决策层**退回保底档保守下界**（不猜测，见 `decide_profile`）。
+
+    ⚠️ **调用方必须传对 `model_id`**：`model_id=None` 的含义是"只认通用记录"，
+    而不是"随便哪个模型都行"。能力快照曾经漏传，见 `read_snapshot_calibration`。
     """
     if not fingerprint:
         return None
@@ -101,6 +104,41 @@ def read_calibration_view(
     )
 
 
+def probe_model_id() -> int | None:
+    """探针模型在 `MODEL` 表里的 id（能力快照的标定取数要用它）。
+
+    与 `calibration_service._resolve_target()` 用同一条查法（`Model.path == path.name`），
+    保证"标定写哪条记录"与"快照读哪条记录"指向同一个模型。
+    """
+    path = probe_model_path()
+    if path is None:
+        return None
+    try:
+        s = get_session()
+        try:
+            row = s.scalars(select(Model).where(Model.path == path.name).limit(1)).first()
+            return row.id if row is not None else None
+        finally:
+            s.close()
+    except Exception as exc:  # 查不到 id 不阻断快照，退化为"通用记录"口径
+        logger.debug("探针模型 id 查询失败（按通用记录取标定）: %s", exc)
+        return None
+
+
+def read_snapshot_calibration(fingerprint: str | None) -> CalibrationView | None:
+    """**能力快照口径**的标定取数：按「探针模型 × 指纹」取。
+
+    🔴 为什么必须单独有这个函数（2026-10-11 实测缺陷）：
+    `engine/capabilities.py` 原先直接调 `read_calibration_view(fingerprint)` ——
+    **漏传 `model_id`**，于是它精确匹配的是 `model_id is NULL` 的"通用记录"。
+    而标定**永远**会带上探针模型 id（`calibration_service._resolve_target` 查得到行），
+    所以这个查询**恒为 None** → 快照的 `using_fallback` 永久停在 `true`。
+    症状：硬件能力页横幅「当前使用保守参数…」永不消失、参数来源恒为「保守取值（未标定）」，
+    **且重新标定多少次都没用**（标定本身是成功的，只是没人读得到它）。
+    """
+    return read_calibration_view(fingerprint, probe_model_id())
+
+
 def _snapshot() -> tuple[dict, dict]:
     """取能力快照（进程内缓存；首次调用会跑一次阶段 A/B，之后为读缓存）。
 
@@ -111,8 +149,10 @@ def _snapshot() -> tuple[dict, dict]:
         settings_store.effective_data_root(),
         probe_model=probe_model_path(),
         models_dir=settings_store.effective_model_dir(),
-        # 引擎层不读库：把"指纹 → 标定结论"的取数交给应用层
-        calibration_provider=read_calibration_view,
+        # 引擎层不读库：把"指纹 → 标定结论"的取数交给应用层。
+        # 必须是**探针模型口径**（`read_snapshot_calibration`），不能只传指纹 ——
+        # 前者决定快照的 active_precision / using_fallback 是否与任务级决策一致。
+        calibration_provider=read_snapshot_calibration,
         simulation=simulation_service.current(),
     )
 
@@ -124,6 +164,19 @@ def get_capability_snapshot() -> tuple[dict, dict]:
     任务期又用目录扫描重验一次"的两套结论。
     """
     return _snapshot()
+
+
+def invalidate_capability_snapshot() -> None:
+    """作废进程内能力快照（标定落定后调用）。
+
+    🔴 为什么必须由标定完成路径触发（2026-10-11 实测缺陷）：
+    快照是**进程内缓存**，`using_fallback` / `active_precision` 在构建那一刻就定了。
+    标定入库后不作废，`GET /api/system/capabilities` 会继续返回**启动时**那套结论
+    —— 用户点了「重新标定」、标定也确实成功入库了，界面却毫无变化。
+    （`engine/capabilities.py` 的注释早已写明"标定落定后需以 refresh=True 重建"，
+    但这根线当时没接上。）
+    """
+    caps_engine.reset_snapshot(settings_store.effective_data_root())
 
 
 def build_capabilities() -> dict:

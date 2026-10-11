@@ -41,8 +41,8 @@ const isDiff = computed(() => !isAuto.value && reqText.value !== resText.value)
       </span>
       <span class="pd-arrow" aria-hidden="true">→</span>
       <span class="pd-value pd-res" :class="{ 'pd-mono': mono }">{{ resText }}</span>
-      <span v-if="usingFallback" class="pd-badge pd-badge-fallback">保底档</span>
-      <span v-else-if="isAuto && resolved !== undefined && resolved !== null" class="pd-badge pd-badge-auto">引擎解析</span>
+      <span v-if="usingFallback" class="pd-badge pd-badge-fallback">保守取值</span>
+      <span v-else-if="isAuto && resolved !== undefined && resolved !== null" class="pd-badge pd-badge-auto">自动决定</span>
     </div>
 
     <span v-if="reason" class="pd-reason">{{ reason }}</span>
@@ -107,7 +107,7 @@ const isDiff = computed(() => !isAuto.value && reqText.value !== resText.value)
 }
 
 .pd-badge {
-  font-size: var(--font-size-11);
+  font-size: var(--font-size-12);
   line-height: 15px;
   padding: 0 5px;
   border-radius: var(--Scale-radius-button);

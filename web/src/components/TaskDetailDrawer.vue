@@ -21,6 +21,7 @@ import ParamDiffRow from './ParamDiffRow.vue'
 import ActionButtons, { type ActionItem } from './ActionButtons.vue'
 import type { Task } from '@/types/api'
 import { toTaskVM } from '@/utils/viewModel'
+import { UNAVAILABLE_COPY, backendLabel } from '@/constants'
 
 const props = defineProps<{
   modelValue: boolean
@@ -58,8 +59,8 @@ const actions = computed<ActionItem[]>(() => {
   const list: ActionItem[] = []
   if (v.isRunning) list.push({ key: 'cancel', label: '取消任务' })
   if (v.isFailed || v.isInterrupted || v.status === 'canceled') {
-    // 重试属 S2；契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并标注
-    list.push({ key: 'retry', label: '重试', disabled: true, disabledReason: '重试属 S2 阶段，尚未实现' })
+    // 重试：契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并写明原因（04 §5）
+    list.push({ key: 'retry', label: '重试', disabled: true, disabledReason: UNAVAILABLE_COPY.retry })
   }
   list.push({
     key: 'compare',
@@ -73,13 +74,13 @@ const actions = computed<ActionItem[]>(() => {
     disabled: !v.hasOutput,
     disabledReason: '暂无产出文件',
   })
-  // 删除属 F-12（S2）；契约 v1.0 无 DELETE /api/tasks/{id} —— 入口禁用并标注
+  // 删除：契约 v1.0 无 DELETE /api/tasks/{id} —— 入口禁用并写明原因
   list.push({
     key: 'remove',
     label: '删除任务',
     type: 'danger',
     disabled: true,
-    disabledReason: '任务删除属 F-12（S2 阶段），尚未实现',
+    disabledReason: UNAVAILABLE_COPY.removeTask,
   })
   return list
 })
@@ -141,7 +142,11 @@ function onAction(key: string) {
         <div class="td-alert-body">
           <p class="td-alert-msg">{{ vm.errorMessage || '任务执行失败' }}</p>
           <p v-if="vm.errorSuggestion" class="td-alert-sug">{{ vm.errorSuggestion }}</p>
-          <p v-if="vm.errorCode" class="td-alert-code td-mono">{{ vm.errorCode }}</p>
+          <!-- 原始错误码降级为「次要 + 可复制」：PRD §5 要求错误码不进正文，
+               但排查问题时确实需要它，故保留为弱化的等宽小字而非醒目展示。 -->
+          <p v-if="vm.errorCode" class="td-alert-code td-mono" :title="'错误代码（排查问题时可提供给维护者）'">
+            错误代码：{{ vm.errorCode }}
+          </p>
         </div>
       </section>
 
@@ -151,7 +156,7 @@ function onAction(key: string) {
         <div class="td-alert-body">
           <p class="td-alert-msg">{{ vm.errorMessage || '任务已被中断' }}</p>
           <p class="td-alert-sug">
-            {{ vm.errorSuggestion || '应用重启或进程退出导致中断；重试能力属 S2 阶段，暂不可用' }}
+            {{ vm.errorSuggestion || '程序重启或异常退出会导致任务中断，请重新提交任务' }}
           </p>
         </div>
       </section>
@@ -170,7 +175,7 @@ function onAction(key: string) {
       <!-- 区段二 · 参数与解析 -->
       <section class="td-sec">
         <h4 class="td-h">参数与解析</h4>
-        <p class="td-hint">左为请求值，右为引擎实际解析值；「自动」表示交由引擎按当前档位决定。</p>
+        <p class="td-hint">左侧为你提交的值，右侧为实际生效的值；标注「自动」表示由系统按当前硬件能力自动决定。</p>
         <div class="td-params">
           <ParamDiffRow
             v-for="row in vm.paramRows"
@@ -208,27 +213,27 @@ function onAction(key: string) {
       <!-- 区段四 · 执行证据 -->
       <section class="td-sec">
         <h4 class="td-h">
-          EP 执行证据
+          执行方式验证
           <el-tooltip
-            content="判据：目标 EP 节点数 > 0 且 CPU 节点数 = 0。节点数为 1 属整图融合的正常现象。"
+            content="用于确认加速是否真正生效：需该方式的运算节点数大于 0，且没有运算落在 CPU 上。节点数为 1 通常表示整图合并计算，属正常现象。"
             placement="top"
           >
             <el-icon :size="13" class="td-h-flag"><InfoFilled /></el-icon>
           </el-tooltip>
         </h4>
-        <div v-if="epRows.length === 0" class="td-none">无证据记录</div>
+        <div v-if="epRows.length === 0" class="td-none">无验证记录</div>
         <table v-else class="td-table">
           <thead>
             <tr>
-              <th>执行提供器</th>
-              <th class="td-num">节点数</th>
+              <th>加速方式</th>
+              <th class="td-num">运算节点</th>
               <th>CPU 节点</th>
-              <th>判定</th>
+              <th>结论</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="e in epRows" :key="e.provider">
-              <td class="td-mono">{{ e.provider }}</td>
+              <td class="td-mono">{{ backendLabel(e.provider) }}</td>
               <td class="td-num td-mono">{{ e.node_count }}</td>
               <td class="td-num td-mono">{{ e.cpu_node_count }}</td>
               <td>
@@ -241,7 +246,7 @@ function onAction(key: string) {
         </table>
         <p v-if="epRows[0]?.note" class="td-hint">{{ epRows[0].note }}</p>
         <p v-if="vm.resolved?.backend" class="td-hint">
-          实际生效后端：<span class="td-mono">{{ vm.resolved.backend }}</span>
+          实际生效后端：<span class="td-mono">{{ backendLabel(vm.resolved.backend) }}</span>
           <template v-if="vm.resolved.precision">
             · 精度 <span class="td-mono">{{ vm.resolved.precision }}</span>
           </template>
@@ -446,7 +451,7 @@ function onAction(key: string) {
 
 .td-art-kind {
   flex: 0 0 auto;
-  font-size: var(--font-size-11);
+  font-size: var(--font-size-12);
   line-height: 15px;
   padding: 0 5px;
   border-radius: var(--Scale-radius-button);

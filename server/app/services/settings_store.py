@@ -45,7 +45,7 @@ from ..db import get_session
 from ..engine.simulation import VALID_TIERS as _SIM_TIERS
 from ..engine.simulation import parse_tier as _parse_tier
 from ..engine.simulation import parse_vram_mb as _parse_vram_mb
-from ..models.entities import Artifact, Calibration, Setting, Task
+from ..models.entities import Artifact, Setting, Task
 
 logger = logging.getLogger("websr.services.settings_store")
 
@@ -128,9 +128,17 @@ def _load_overrides() -> dict[str, str]:
 
 
 def effective(key: str) -> str:
-    """生效值：覆盖行优先，其次声明默认值。未知键抛 AppError。"""
+    """生效值：只读派生键走派生，其余覆盖行优先、其次声明默认值。未知键抛 AppError。
+
+    ⚠️ 只读派生键（`model_dir` / `calibration_state`）**不能走 `_default`**：
+    那会让 `effective("calibration_state")` 恒返回声明默认值 `"pending"`，
+    与 `list_settings()`（走 `_readonly_value`）给出相反结论 ——
+    `build_diagnostics()` 正是踩过这个坑（诊断 JSON 的 `calibration.state` 永远说"未完成"）。
+    """
     if key not in _SPEC_BY_KEY:
         raise AppError("VALIDATION_ERROR", f"未知配置项: {key}", "请刷新页面后重试", 400)
+    if not _SPEC_BY_KEY[key].writable:
+        return _readonly_value(key)
     ov = _load_overrides()
     if key in ov:
         return ov[key]
@@ -208,17 +216,22 @@ def _default(key: str) -> str:
 
 
 def _calibration_state() -> str:
-    """有有效标定记录才算 done（阶段 C / T-805 已接入，此逻辑已在线上生效）。"""
+    """本机是否**已命中有效标定** —— 与硬件能力页的"参数来源"**同源**（同一个判据）。
+
+    ⚠️ **不能只看"库里有没有 valid 记录"**（2026-10-11 实测缺陷）：标定记录按
+    「硬件指纹 × 模型」隔离，换驱动 / 换模型后旧记录仍在且 `valid=True`，
+    但它对**本机当前配置**无效 —— 那样设置页会说「已完成」、硬件能力页却说
+    「保守取值（未标定）」，**同一件事两个相反结论**。故直接复用能力快照的
+    `using_fallback`（它已按「探针模型 × 当前指纹」判定）。
+    """
     try:
-        s = get_session()
-        try:
-            has = s.scalar(
-                select(Calibration.id).where(Calibration.valid.is_(True)).limit(1)
-            )
-            return "done" if has is not None else "pending"
-        finally:
-            s.close()
+        # 局部 import：`system_info` 模块级依赖本模块，模块级互引会成环
+        from . import system_info  # noqa: PLC0415
+
+        caps, _ = system_info.get_capability_snapshot()
+        return "pending" if caps.get("using_fallback") else "done"
     except Exception as exc:
+        # 取不到就报"未完成"（保守方向：不冒领已完成）
         logger.debug("标定状态读取失败，回退 pending: %s", exc)
         return "pending"
 

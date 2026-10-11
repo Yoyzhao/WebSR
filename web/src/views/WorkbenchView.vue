@@ -30,8 +30,9 @@ import { useTaskStore } from '@/stores/tasks'
 import { useSystemStore } from '@/stores/system'
 import { downloadFile, fetchModels, fileContentUrl, uploadFile } from '@/api/client'
 import type { Model, TaskParams, UploadResult } from '@/types/api'
-import { UPLOAD } from '@/constants'
+import { UNAVAILABLE_COPY, UPLOAD } from '@/constants'
 import { formatBytes, formatResolution } from '@/utils/format'
+import { toModelVM } from '@/utils/viewModel'
 
 const route = useRoute()
 const router = useRouter()
@@ -75,8 +76,16 @@ const form = ref({
 // ---------------------------------------------------------------------------
 const selectedModel = computed(() => models.value.find((m) => m.id === form.value.modelId) ?? null)
 
-/** 所选模型的适配简介（T-716）：随模型行展示，让用户在工作台内即可确认选型是否匹配素材 */
-const selectedModelDesc = computed(() => selectedModel.value?.description ?? '')
+/** 所选模型的适配简介（T-716）：随模型行展示，让用户在工作台内即可确认选型是否匹配素材。
+ *
+ *  2026-10-11：与模型库卡片共用同一套两级拆分（`toModelVM` 内 `splitDescription`）——
+ *  工作台与模型库对同一模型的介绍若呈现形态不同，用户会以为数据不一致。
+ *  这里取「定位 + 补充」而非原文整段。 */
+const selectedModelVM = computed(() =>
+  selectedModel.value ? toModelVM(selectedModel.value) : null,
+)
+const selectedModelLead = computed(() => selectedModelVM.value?.descLead ?? '')
+const selectedModelDesc = computed(() => selectedModelVM.value?.descDetail ?? '')
 
 const detailTask = computed(() => taskStore.tasks.find((t) => t.id === detailTaskId.value) ?? null)
 
@@ -297,15 +306,18 @@ async function onTaskAction({ key, id }: { key: string; id: string }) {
     return
   }
   if (key === 'retry') {
-    // S2 阶段能力（PRD US-05 批量场景）；后端契约 v1.0 无重试端点 —— 界面入口已禁用
-    ElMessage.info('重试功能属 S2 阶段，尚未实现')
+    // 契约 v1.0 无重试端点 —— 入口已禁用，这里兜住被键盘/程序触发的调用
+    ElMessage.info(UNAVAILABLE_COPY.retry)
   }
 }
 
 function runCalibration() {
   system
     .calibrate()
-    .then(() => ElMessage.success('标定已触发，可在硬件能力页查看进度与结果'))
+    // 硬件能力页目前**没有**标定进度/结果区块（原型 P4 未定义），故不承诺"可去那里看进度"。
+    // 标定是异步作业，刷新能力快照后各页的「参数来源 / 保守取值横幅」会即时跟随。
+    .then(() => system.load())
+    .then(() => ElMessage.success('标定已触发，完成后「自动档」将按本机实测结果取值'))
     .catch((e: Error) => ElMessage.error(e.message || '标定触发失败'))
 }
 
@@ -384,7 +396,7 @@ onMounted(async () => {
         </SectionCard>
 
         <SectionCard title="参数" class="wb-params">
-          <SettingsRow label="自动档" hint="tile / 精度 / 后端由引擎按实测标定决定">
+          <SettingsRow label="自动档" hint="tile、精度与加速方式由系统按本机实测结果自动决定">
             <SegmentedControl
               :model-value="autoMode ? 'auto' : 'manual'"
               :options="[
@@ -405,18 +417,23 @@ onMounted(async () => {
             />
           </SettingsRow>
 
-          <SettingsRow label="模型" hint="模型始终由你选择，引擎不做推荐">
+          <!-- 「模型始终由你选择，系统不做推荐」已移除（2026-10-11）：
+               这是**否定式表述**，用户要的是「有哪些模型可用」，而非被告知系统不做什么；
+               且 PRD §7.3 的「不做自动推荐」由**行为**保证（无推荐标记、排序不干预），
+               不需要靠一句提示反复声明。位置留给模型简介，信息量更高。 -->
+          <SettingsRow label="模型">
             <select v-model="form.modelId" class="wb-select" :disabled="modelsLoading">
               <option v-for="o in modelOptions" :key="o.value" :value="o.value" :disabled="o.disabled">
                 {{ o.label }}
               </option>
             </select>
+            <p v-if="selectedModelLead" class="wb-model-lead">{{ selectedModelLead }}</p>
             <p v-if="selectedModelDesc" class="wb-model-desc" :title="selectedModelDesc">
               {{ selectedModelDesc }}
             </p>
           </SettingsRow>
 
-          <SettingsRow label="分块 tile" :hint="paramsLocked ? '自动档下由引擎决定' : '越小的 tile 越省显存，但更慢'">
+          <SettingsRow label="分块大小" :hint="paramsLocked ? '自动模式下由系统决定' : '数值越小越省显存，但处理更慢'">
             <SegmentedControl
               :model-value="String(form.tile)"
               :options="[
@@ -429,7 +446,7 @@ onMounted(async () => {
             />
           </SettingsRow>
 
-          <SettingsRow label="精度" :hint="paramsLocked ? '自动档下由引擎决定' : 'CPU 路径强制 fp32'">
+          <SettingsRow label="精度" :hint="paramsLocked ? '自动模式下由系统决定' : '使用 CPU 时仅支持 fp32'">
             <SegmentedControl
               v-model="form.precision"
               :options="[
@@ -541,7 +558,7 @@ onMounted(async () => {
             </button>
           </div>
           <p class="wb-ready-hint">
-            {{ autoMode ? '当前为自动档：tile / 精度 / 后端将由引擎按实测标定结果决定，实际生效值可在任务详情中核对。' : '当前为手动档：你所填参数将被直接使用，若资源不足引擎会降档并在任务详情中显式说明。' }}
+            {{ autoMode ? '当前为自动模式：tile、精度与加速方式由系统按本机实测结果决定，实际生效值可在任务详情中核对。' : '当前为手动模式：你设置的参数将被直接使用；若资源不足，系统会自动降低参数并在任务详情中说明。' }}
           </p>
         </SectionCard>
       </section>
@@ -569,7 +586,7 @@ onMounted(async () => {
     <!-- 窄屏抽屉：参数 -->
     <ElDrawer v-model="paramsDrawer" direction="ltr" size="320px" title="参数">
       <div class="wb-drawer-body">
-        <SettingsRow label="自动档" hint="tile / 精度 / 后端由引擎决定">
+        <SettingsRow label="自动档" hint="tile、精度与加速方式由系统决定">
           <SegmentedControl
             :model-value="autoMode ? 'auto' : 'manual'"
             :options="[
@@ -594,11 +611,12 @@ onMounted(async () => {
               {{ o.label }}
             </option>
           </select>
+          <p v-if="selectedModelLead" class="wb-model-lead">{{ selectedModelLead }}</p>
           <p v-if="selectedModelDesc" class="wb-model-desc" :title="selectedModelDesc">
             {{ selectedModelDesc }}
           </p>
         </SettingsRow>
-        <SettingsRow label="分块 tile">
+        <SettingsRow label="分块大小">
           <SegmentedControl
             :model-value="String(form.tile)"
             :options="[
@@ -655,7 +673,7 @@ onMounted(async () => {
       @cancel="(id: string) => onTaskAction({ key: 'cancel', id })"
       @retry="(id: string) => onTaskAction({ key: 'retry', id })"
       @download="(id: string) => onTaskAction({ key: 'download', id })"
-      @remove="() => ElMessage.info('任务删除 / 清理属 F-12（S2 阶段），尚未实现')"
+      @remove="() => ElMessage.info(UNAVAILABLE_COPY.removeTask)"
     />
   </div>
 </template>
@@ -706,7 +724,7 @@ onMounted(async () => {
   border-radius: var(--Scale-radius-pill);
   background: var(--Theme-primary);
   color: var(--Theme-on-primary);
-  font-size: var(--font-size-11);
+  font-size: var(--font-size-12);
   line-height: 15px;
   text-align: center;
 }
@@ -924,17 +942,28 @@ onMounted(async () => {
   border-color: var(--Theme-primary);
 }
 
-/* 模型适配简介（T-716）：随所选模型展示，与 hint 同级的小字、随控件列左对齐。
- * 简介文案较长（60–90 字），限 3 行防参数卡被撑高，全文悬浮 title 可见。 */
+/* 模型适配简介（T-716）：与模型库卡片同一套两级结构 ——
+ * **定位句**（回答「这是什么」）用主色，与下拉框同属"当前选择"的信息组；
+ * **补充句**（回答「何时用」）退为三级色小字，限 2 行，全文悬浮可见。
+ * 工作台左栏仅约 280px，比卡片更窄，故比卡片再少一级行数。 */
+.wb-model-lead {
+  margin: var(--Scale-space-1) 0 0;
+  width: 100%;
+  font-size: var(--font-size-13);
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--Theme-text-primary);
+}
+
 .wb-model-desc {
   margin: 2px 0 0;
   width: 100%;
   font-size: var(--font-size-12);
-  line-height: 17px;
+  line-height: 16px;
   color: var(--Theme-text-tertiary);
   display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -946,13 +975,23 @@ onMounted(async () => {
  *   ② 最宽的一行（后端 4 项合计 247px）超出可用宽度 228px，折成 3 + 1 两行，
  *      第二行只剩一个按钮，更显零散。
  * 改为「固定 label 列 + 控件左对齐」：所有控件自同一 x 起排，形成规整的纵向
- * 基线；hint 随控件左对齐，不再与下一行 label 形成对角关系。 */
+ * 基线；hint 随控件左对齐，不再与下一行 label 形成对角关系。
+ *
+ * 2026-10-11：label 列 64 → 76px，并禁止 label 折行。字阶 +1 档后，
+ *   「自动档」「分块大小」在 64px 下会折成两行（实测截图确认），
+ *   而 6 行参数一旦高度参差，卡片底部就无法对齐。label 均为 2–4 字短词，
+ *   宁可让控件列略窄也不折行。 */
 .wb-params :deep(.settings-row),
 .wb-drawer-body :deep(.settings-row) {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-columns: 76px minmax(0, 1fr);
   align-items: center;
   column-gap: 10px;
+}
+
+.wb-params :deep(.settings-row__label),
+.wb-drawer-body :deep(.settings-row__label) {
+  white-space: nowrap;
 }
 
 .wb-params :deep(.settings-row__value),
@@ -1003,15 +1042,19 @@ onMounted(async () => {
   background: transparent;
   color: var(--Theme-text-secondary);
   font-family: var(--font-mono);
-  font-size: var(--font-size-12);
-  line-height: 16px;
-  padding: 4px 6px;
+  font-size: var(--font-size-13);
+  line-height: 18px;
+  padding: 5px 6px;
   border-radius: var(--Scale-radius-button);
   cursor: pointer;
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition:
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
 }
 
 .wb-be:hover:not(:disabled) {

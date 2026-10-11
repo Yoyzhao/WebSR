@@ -357,6 +357,31 @@ export interface Setting {
   type: 'string' | 'number' | 'boolean'
 }
 
+/**
+ * 标定作业状态（`GET /api/system/calibration` 的 `state`，api-contract §4.4）。
+ *
+ * 标定是**异步作业**（吃满 GPU 数秒～数十秒）：`POST /api/system/calibrate`
+ * 立即返回作业号，进度与结果只能从 `state` 读取。
+ */
+export interface CalibrationJobState {
+  job_id: string | null
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'skipped'
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+  /** 结论是否已入库（未入库 = 本次结果不会被引擎采纳） */
+  stored: boolean
+  /** 被跳过时的原因（如模拟态产出、模型约束不满足） */
+  skipped_reason: string | null
+  progress: string[]
+  outcome: {
+    recommended_tile?: number | null
+    precision_decision?: string | null
+    recommended_tier?: string | null
+    reason?: string | null
+  } | null
+}
+
 export interface SettingsPayload {
   items: Setting[]
 }

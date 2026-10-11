@@ -11,8 +11,8 @@
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { fetchCapabilities, fetchSettings, saveSettings, triggerCalibration } from '@/api/client'
-import type { Capabilities, Setting } from '@/types/api'
+import { fetchCapabilities, fetchCalibration, fetchSettings, saveSettings, triggerCalibration } from '@/api/client'
+import type { CalibrationJobState, Capabilities, Setting } from '@/types/api'
 
 /**
  * 档位模拟的四个设置键。
@@ -131,13 +131,46 @@ export const useSystemStore = defineStore('system', () => {
     await Promise.all([load(), loadSimulationDraft()])
   }
 
-  async function calibrate(): Promise<void> {
+  /**
+   * 触发一轮标定，返回作业号。
+   *
+   * ⚠️ 返回只代表**作业已投递**（端点异步：标定吃满 GPU 数秒～数十秒）。
+   * 调用方若只发 POST 就结束，用户点完看不到任何变化 —— 必须再
+   * `waitForCalibration(jobId)` 等终态并 `load()` 刷新能力快照（实测反馈"点了没反应"）。
+   */
+  async function calibrate(): Promise<{ started: boolean; jobId: string | null }> {
     calibrating.value = true
     try {
-      await triggerCalibration()
+      const r = await triggerCalibration()
+      return { started: Boolean(r?.started), jobId: r?.task_id ?? null }
     } finally {
       calibrating.value = false
     }
+  }
+
+  /**
+   * 等标定作业跑到终态（轮询 `GET /api/system/calibration`）。
+   *
+   * 用 `jobId` 对齐：否则一次"上一轮刚结束、本轮刚投递"的时序会立刻拿到旧终态。
+   * 超时返回 `null`（作业仍在跑）——不假装成功。
+   */
+  async function waitForCalibration(
+    jobId: string | null,
+    timeoutMs = 180_000,
+  ): Promise<CalibrationJobState | null> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await new Promise((r) => window.setTimeout(r, 1500))
+      try {
+        const { state } = await fetchCalibration()
+        if (state.status !== 'running' && (jobId === null || state.job_id === jobId)) {
+          return state
+        }
+      } catch {
+        // 网络抖动：继续轮询直到超时（标定在服务端照常进行，不受前端影响）
+      }
+    }
+    return null
   }
 
   return {
@@ -159,5 +192,6 @@ export const useSystemStore = defineStore('system', () => {
     loadSimulationDraft,
     applySimulation,
     calibrate,
+    waitForCalibration,
   }
 })

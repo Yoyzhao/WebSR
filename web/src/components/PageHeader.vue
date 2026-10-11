@@ -37,15 +37,16 @@ defineProps<{
 
 .page-header__title {
   margin: 0;
-  font-size: var(--font-size-20);
+  font-size: var(--font-size-21);
   font-weight: 600;
   color: var(--Theme-text-primary);
   line-height: var(--line-height-tight);
+  letter-spacing: -0.01em;
 }
 
 .page-header__subtitle {
   margin: var(--Scale-space-1) 0 0;
-  font-size: var(--font-size-13);
+  font-size: var(--font-size-14);
   color: var(--Theme-text-tertiary);
   line-height: var(--line-height-body);
 }
@@ -54,7 +55,7 @@ defineProps<{
   margin-left: var(--Scale-space-2);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: var(--font-size-12);
+  font-size: var(--font-size-13);
   color: var(--Theme-text-secondary);
 }
 
