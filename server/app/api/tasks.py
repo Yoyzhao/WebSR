@@ -10,8 +10,15 @@ from sqlalchemy import select
 from ..core.errors import AppError
 from ..db import get_session
 from ..models.entities import Artifact, Task
-from ..schemas.task import ArtifactOut, CreateTaskIn, LogEntryOut, TaskOut
-from ..services import task_logs
+from ..schemas.task import (
+    ArtifactOut,
+    CreateTaskIn,
+    LogEntryOut,
+    TaskClearOut,
+    TaskDeleteOut,
+    TaskOut,
+)
+from ..services import task_cleanup, task_logs
 from ..tasks.manager import manager, parse_task_id, serialize_artifact, serialize_task
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -105,5 +112,38 @@ def list_logs(task_id: str) -> list[LogEntryOut]:
     try:
         t = _get_task_or_404(s, task_id)
         return task_logs.derive_logs(t, task_logs.model_name_for(s, t))
+    finally:
+        s.close()
+
+
+# ---------------------------------------------------------------------------
+# 清理（api-contract v1.1 §4.1，CHG-20261011-08）
+#
+# ⚠️ 批量清理的路由必须**先于**任何单段 POST 路由声明：`/clear-finished` 与
+#    `/{task_id}` 同为单段路径，声明晚会被当成 task_id 吃掉。
+#    （当前 `POST ""` 是空段、`POST /{task_id}/cancel` 是两段，暂不冲突，
+#     但把顺序写成自解释的，避免以后有人加 `/api/tasks/{task_id}` 时踩这个坑。）
+# ---------------------------------------------------------------------------
+
+
+@router.post("/clear-finished")
+def clear_finished_tasks() -> TaskClearOut:
+    """清理全部终态任务（含其产出文件）。返回按状态分类的真实计数。"""
+    s = get_session()
+    try:
+        return TaskClearOut(**task_cleanup.clear_finished(s))
+    finally:
+        s.close()
+
+
+@router.delete("/{task_id}")
+def delete_task(task_id: str) -> TaskDeleteOut:
+    """删除单个终态任务（含其产出文件）。
+
+    非终态 → `409 TASK_NOT_TERMINAL`（先取消）；不存在 → `TASK_NOT_FOUND`。
+    """
+    s = get_session()
+    try:
+        return TaskDeleteOut(**task_cleanup.delete_task(s, task_id))
     finally:
         s.close()

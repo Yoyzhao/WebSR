@@ -26,8 +26,9 @@ import ActionButtons from '@/components/ActionButtons.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useTaskStore } from '@/stores/tasks'
 import { downloadFile, fileContentUrl } from '@/api/client'
-import { PAGE_MAX_WIDTH, UNAVAILABLE_COPY, backendLabel } from '@/constants'
+import { PAGE_MAX_WIDTH, STATUS_LABEL, UNAVAILABLE_COPY, backendLabel } from '@/constants'
 import { toTaskVM, type TaskVM } from '@/utils/viewModel'
+import { formatBytes } from '@/utils/format'
 import type { Task } from '@/types/api'
 
 const route = useRoute()
@@ -133,17 +134,80 @@ async function onAction({ key, id }: { key: string; id: string }) {
     }
   }
   if (key === 'retry') {
-    // 契约 v1.0 无重试端点 —— 入口已禁用，这里兜住被键盘/程序触发的调用
+    // 契约 v1.1 仍无重试端点 —— 入口已禁用，这里兜住被键盘/程序触发的调用
     return ElMessage.info(UNAVAILABLE_COPY.retry)
+  }
+  // 行内「删除」与抽屉「删除任务」共用同一处理器：二次确认与文案只有一处，不会漂移
+  if (key === 'remove') return onRemove(id)
+}
+
+/**
+ * 终态任务按状态分类计数 —— 二次确认要**逐类列出**（"已完成 12 · 已取消 3"），
+ * 而不是一句含糊的"共 N 条"：删除不可逆，用户有权知道删的到底是什么。
+ */
+function finishedBreakdown(): string {
+  const counter = new Map<string, number>()
+  for (const t of taskStore.finishedTasks) counter.set(t.status, (counter.get(t.status) ?? 0) + 1)
+  return [...counter.entries()].map(([s, n]) => `${STATUS_LABEL[s] ?? s} ${n}`).join(' · ')
+}
+
+/**
+ * 清理已完成（5A `01 §3.2` 定稿的头部入口；`04 §5` 要求二次确认 + 数量 + 说明删结果文件）。
+ *
+ * 范围 = **全部终态任务**（已完成 / 已取消 / 失败 / 已中断）—— 界面用词沿用定稿的
+ * 「清理已完成」，但数量按类如实列出，不做让人意外的删除。运行中的任务不受影响。
+ */
+async function clearFinished() {
+  const total = taskStore.finishedTasks.length
+  if (total === 0) return ElMessage.info('当前没有已结束的任务')
+
+  try {
+    await ElMessageBox.confirm(
+      `将删除 ${total} 条已结束的任务记录及其产出文件（${finishedBreakdown()}）。删除后不可恢复。`,
+      '清理已完成',
+      { confirmButtonText: '确认清理', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    const res = await taskStore.clearFinished()
+    if (compareTaskId.value && !compareTask.value) stopCompare()
+    ElMessage.success(
+      `已清理 ${res.cleared} 条任务，删除 ${res.deleted_files} 个文件（${formatBytes(res.freed_bytes)}）`,
+    )
+  } catch (e) {
+    ElMessage.error((e as Error).message || '清理失败')
   }
 }
 
-function clearFinished() {
-  ElMessage.info(UNAVAILABLE_COPY.clearTasks)
-}
+/**
+ * 删除单个任务（详情抽屉的「删除任务」，危险操作）。
+ *
+ * 服务端只接受终态任务：仍在跑的会返回 `409 TASK_NOT_TERMINAL`，
+ * 那时提示"请先取消"而不是静默失败 —— 抽屉里的按钮也该在运行期就置灰。
+ */
+async function onRemove(id: string) {
+  const t = taskStore.tasks.find((x) => x.id === id)
+  if (!t) return
 
-function onRemove() {
-  ElMessage.info(UNAVAILABLE_COPY.removeTask)
+  try {
+    await ElMessageBox.confirm(
+      `将删除「${t.filename}」这条任务记录及其产出文件。删除后不可恢复。`,
+      '删除任务',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    const res = await taskStore.remove(id)
+    detailOpen.value = false
+    if (compareTaskId.value === id) stopCompare()
+    ElMessage.success(`已删除该任务及其 ${res.deleted_files} 个文件（${formatBytes(res.freed_bytes)}）`)
+  } catch (e) {
+    ElMessage.error((e as Error).message || '删除失败')
+  }
 }
 
 onMounted(async () => {
@@ -164,10 +228,10 @@ watch(
   <div class="tasks-page" :style="{ maxWidth: PAGE_MAX_WIDTH.tasks + 'px' }">
     <PageHeader title="任务中心" subtitle="全部超分修复任务的执行记录与产出">
       <template #actions>
-        <!-- 清理任务：契约 v1.0 无 DELETE /api/tasks —— 入口禁用并写明原因 -->
+        <!-- 清理任务（5A `01 §3.2` 定稿位置）：范围与保护机制见 `clearFinished()` -->
         <ActionButtons
           :actions="[
-            { key: 'clear', label: '清理已完成', disabled: true, disabledReason: UNAVAILABLE_COPY.clearTasks },
+            { key: 'clear', label: '清理已完成', disabled: taskStore.finishedTasks.length === 0, disabledReason: '当前没有已结束的任务' },
           ]"
           size="sm"
           @action="clearFinished"
@@ -344,10 +408,20 @@ watch(
                       { key: 'compare', label: '对比', disabled: !vm.isDone, disabledReason: '任务完成后才能对比' },
                       { key: 'download', label: '下载', disabled: !vm.hasOutput, disabledReason: '暂无产出文件' },
                       vm.isRunning ? { key: 'cancel', label: '取消' } : null,
-                      // 重试：契约 v1.0 无 POST /api/tasks/{id}/retry —— 入口禁用并写明原因
+                      // 重试：契约 v1.1 仍无 POST /api/tasks/{id}/retry —— 入口禁用并写明原因
                       vm.isFailed || vm.isInterrupted || vm.status === 'canceled'
                         ? { key: 'retry', label: '重试', disabled: true, disabledReason: UNAVAILABLE_COPY.retry }
                         : null,
+                      // 删除（2026-10-11 用户要求补进行内；契约 v1.1 起可用）：
+                      // 与详情抽屉同一处理器（`onRemove`），保护机制也一致 —— 二次确认 + 写明文件名 + 不可恢复。
+                      // 运行中置灰：服务端会 409，把门控**前置**到按钮上，别让用户点完才吃报错。
+                      {
+                        key: 'remove',
+                        label: '删除',
+                        type: 'danger',
+                        disabled: vm.isRunning,
+                        disabledReason: '任务执行中不能删除，请先取消',
+                      },
                     ].filter(Boolean) as any
                   "
                   size="sm"
@@ -495,9 +569,10 @@ watch(
   text-align: right;
 }
 
-/* 操作列：最多可同时出现 对比/下载/取消/重试 四个按钮，
+/* 操作列：最多可同时出现 对比/下载/取消/删除 或 对比/下载/重试/删除 四个按钮，
    列宽已按四按钮一行预留（224px），这里禁掉换行兜底 ——
-   极窄屏由 .tp-table-wrap 的横向滚动接管，而不是折成两行。 */
+   极窄屏由 .tp-table-wrap 的横向滚动接管，而不是折成两行。
+   （取消与重试互斥：前者只在运行中出现、后者只在失败/中断/已取消中出现。） */
 .tp-actions :deep(.action-buttons) {
   flex-wrap: nowrap;
   justify-content: flex-end;

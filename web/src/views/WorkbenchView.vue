@@ -12,10 +12,10 @@
  *
  * ⚠️ 不设宽度上限 —— 中栏是图像预览区，宽度直接转化为可用预览面积（05 §2.2）。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
-import { UploadFilled, Setting, Tickets, Picture, RefreshLeft, Download } from '@element-plus/icons-vue'
+import { UploadFilled, Setting, Tickets, Picture, RefreshLeft, Download, RefreshRight } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionCard from '@/components/SectionCard.vue'
 import SettingsRow from '@/components/SettingsRow.vue'
@@ -29,7 +29,7 @@ import CompareSlider from '@/components/CompareSlider.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useTaskStore } from '@/stores/tasks'
 import { useSystemStore } from '@/stores/system'
-import { downloadFile, fetchModels, fileContentUrl, uploadFile } from '@/api/client'
+import { downloadFile, fetchFileBlob, fetchModels, fileContentUrl, uploadFile } from '@/api/client'
 import type { Model, TaskParams, UploadResult } from '@/types/api'
 import { UNAVAILABLE_COPY, UPLOAD } from '@/constants'
 import { formatBytes, formatResolution } from '@/utils/format'
@@ -152,7 +152,15 @@ async function downloadPreviewResult(): Promise<void> {
   }
 }
 
-const canSubmit = computed(() => !!uploaded.value && !submitting.value)
+/**
+ * 服务端并发度为 1（`tasks/manager.py` 的 `_active_id`）：已有任务在跑时新提交必被
+ * `409 TASK_ALREADY_RUNNING` 拒绝。源图不再随提交清空后，这个门会被频繁碰到，
+ * 所以在按钮上**前置**说明 —— 比让用户点完再吃一个报错好。
+ * （文案不写「并发度为 1」这类内部量：用户需要知道的是"现在不行、什么时候行"。）
+ */
+const queueBusy = computed(() => taskStore.runningTasks.length > 0)
+
+const canSubmit = computed(() => !!uploaded.value && !submitting.value && !queueBusy.value)
 
 const backendOptions = computed(() => {
   const m = selectedModel.value
@@ -243,62 +251,123 @@ const paramsLocked = computed(() => autoMode.value)
  * 预览图 URL。
  * 刚上传的文件用本地对象 URL（零延迟、不占后端带宽）；刷新后回落到按
  * 任务的 `file_id` 向后端取原图 —— 否则刷新即退化为占位图。
+ *
+ * ⚠️ 本地对象 URL 只在「它**就是**被预览那条任务的源图」时才用（2026-10-11）：
+ * 源图在提交后不再被清空，用户完全可能一边等任务、一边又选了张新图 ——
+ * 那时若无条件优先本地 URL，会出现「标题是任务 A、图是 B」的错配。
  */
 const previewImageUrl = computed(() => {
-  if (sourcePreviewUrl.value) return sourcePreviewUrl.value
   const t = previewTask.value
-  return t?.file_id ? fileContentUrl(t.file_id, 'original') : ''
+  if (t?.file_id && uploaded.value?.file_id === t.file_id && sourcePreviewUrl.value) {
+    return sourcePreviewUrl.value
+  }
+  return t?.file_id ? fileContentUrl(t.file_id, 'original') : sourcePreviewUrl.value
 })
 
 // ---------------------------------------------------------------------------
 // 交互
 // ---------------------------------------------------------------------------
-async function onPickFile(file: File) {
+/**
+ * 校验 + 上传 + 进入「待提交」态。
+ *
+ * 三个入口共用这一条路径：拖入、点击选择、**把产出作为新的源图**（`useResultAsSource`）。
+ * 共用是刻意的 —— 校验规则（扩展名白名单 / 大小上限）与后端 `save_upload` 必须一致，
+ * 分散成两份实现迟早漂移。
+ */
+async function acceptFile(file: File, notice?: string): Promise<boolean> {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
   if (!(UPLOAD.extensions as string[]).includes(ext)) {
     ElMessage.error(`不支持的格式 .${ext}，请上传 ${UPLOAD.extensions.join(' / ')}`)
-    return
+    return false
   }
   if (file.size > UPLOAD.maxSizeMB * 1024 * 1024) {
     ElMessage.error(`文件超过 ${UPLOAD.maxSizeMB} MB 上限`)
-    return
+    return false
   }
   uploading.value = true
   uploadProgress.value = 0
+  // 进度仅作上传体验，不参与推理进度（推理进度只由 SSE 驱动）
+  const timer = window.setInterval(() => {
+    uploadProgress.value = Math.min(90, uploadProgress.value + 12)
+  }, 90)
   try {
-    // 进度仅作上传体验，不参与推理进度（推理进度只由 SSE 驱动）
-    const timer = window.setInterval(() => {
-      uploadProgress.value = Math.min(90, uploadProgress.value + 12)
-    }, 90)
     const res = await uploadFile(file)
-    window.clearInterval(timer)
     uploadProgress.value = 100
     uploaded.value = res
     if (sourcePreviewUrl.value) URL.revokeObjectURL(sourcePreviewUrl.value)
     sourcePreviewUrl.value = URL.createObjectURL(file)
-    ElMessage.success(`已读取：${formatResolution(res.width, res.height)} · ${formatBytes(res.size)}`)
+    ElMessage.success(notice ?? `已读取：${formatResolution(res.width, res.height)} · ${formatBytes(res.size)}`)
+    return true
   } catch (e) {
     ElMessage.error((e as Error).message || '上传失败')
+    return false
   } finally {
+    // 计时器必须在 finally 收口：上传抛错时若不清，进度条会一直自增（假象）
+    window.clearInterval(timer)
     uploading.value = false
   }
 }
 
 function onDrop(e: DragEvent) {
   const f = e.dataTransfer?.files?.[0]
-  if (f) onPickFile(f)
+  if (f) void acceptFile(f)
 }
 
 function onFileInput(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
-  if (f) onPickFile(f)
+  if (f) void acceptFile(f)
 }
 
+/** 「重新选择」：清空当前源图回到拖放态 —— 提交后不再自动清空，清空权交给用户 */
 function resetUpload() {
   if (sourcePreviewUrl.value) URL.revokeObjectURL(sourcePreviewUrl.value)
   sourcePreviewUrl.value = ''
   uploaded.value = null
   uploadProgress.value = 0
+}
+
+/** 「作为原图继续处理」往返期间禁用按钮（取字节 → 转 File → 上传），避免连点产生多份副本 */
+const adopting = ref(false)
+
+/**
+ * 把当前任务的**产出**设为新的源图，从而对结果继续处理后一轮。
+ *
+ * 为什么要有这个动作：超分/修复天然是多轮的 —— 先 ×2 看整体观感再 ×2 追细节，
+ * 或换一个模型对同一张图再跑一遍。此前每轮都要「下载结果 → 重命名 → 再上传」，
+ * 是纯粹的重复劳动；而产出本来就在系统里，没有理由让用户绕一圈磁盘。
+ *
+ * 实现走「取产出字节 → 转 File → 复用上传链路」：产出落在 `data/outputs/`，
+ * 而任务只接受 `data/uploads/` 里的 `file_id`，所以必须重新登记一份上传
+ * （不新增接口 = 不动 api-contract / types / openapi 三处同步）。
+ * 文件名沿用产出名（`xx_4x.png` 再跑一轮即 `xx_4x_4x.png`），迭代链路一眼可读。
+ *
+ * ⚠️ 这是覆盖式替换：当前源图会被新的一份取代（旧文件仍在服务端，历史任务不受影响）。
+ */
+async function useResultAsSource(): Promise<void> {
+  const t = previewTask.value
+  const out = t?.artifacts?.find((a) => a.kind === 'output')
+  if (!t || !out) {
+    ElMessage.warning('该任务暂无产出文件')
+    return
+  }
+  adopting.value = true
+  try {
+    const blob = await fetchFileBlob(t.file_id, 'result')
+    const name = out.filename || `${t.filename.replace(/\.[^.]+$/, '')}_${t.params?.scale ?? 4}x.png`
+    const ok = await acceptFile(
+      new File([blob], name, { type: blob.type || 'image/png' }),
+      `已把产出「${name}」设为新的源图像，可调整倍率或模型后继续提交`,
+    )
+    // 窄屏左栏在抽屉里、上传区不可见 —— 滚到「待提交任务」卡，让用户看见这一步真的生效
+    if (ok && !isWide.value) {
+      await nextTick()
+      document.querySelector('.wb-ready')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  } catch (e) {
+    ElMessage.error((e as Error).message || '无法读取产出文件')
+  } finally {
+    adopting.value = false
+  }
 }
 
 async function submit() {
@@ -315,7 +384,9 @@ async function submit() {
     }
     const task = await taskStore.submit(uploaded.value.file_id, params)
     ElMessage.success('任务已提交，进度将在下方实时更新')
-    resetUpload()
+    // ⚠️ 这里**刻意不调用 `resetUpload()`**（2026-10-11 用户反馈「任务完成后不要清空输入原图」）：
+    //    超分常要多轮（换倍率 / 换模型再跑一遍），提交即清空等于强迫用户重新上传同一张图。
+    //    清空入口保留给上传区的「重新选择」按钮 —— 何时换图由用户决定，不由提交动作代劳。
     if (!isWide.value) tasksDrawer.value = true
     detailTaskId.value = task.id
   } catch (e) {
@@ -367,8 +438,30 @@ async function onTaskAction({ key, id }: { key: string; id: string }) {
     return
   }
   if (key === 'retry') {
-    // 契约 v1.0 无重试端点 —— 入口已禁用，这里兜住被键盘/程序触发的调用
+    // 契约 v1.1 仍无重试端点 —— 入口已禁用，这里兜住被键盘/程序触发的调用
     ElMessage.info(UNAVAILABLE_COPY.retry)
+  }
+  if (key === 'remove') {
+    const t = taskStore.tasks.find((x) => x.id === id)
+    if (!t) return
+    try {
+      await ElMessageBox.confirm(
+        `将删除「${t.filename}」这条任务记录及其产出文件。删除后不可恢复。`,
+        '删除任务',
+        { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return // 用户取消
+    }
+    try {
+      const res = await taskStore.remove(id)
+      detailOpen.value = false
+      // 删掉的正是中栏正在预览的那条时，预览会随 store 自动回到空态
+      // （`previewTask` 跟随 `sessionTaskIds`，`remove()` 已把它摘除）。
+      ElMessage.success(`已删除该任务及其 ${res.deleted_files} 个文件（${formatBytes(res.freed_bytes)}）`)
+    } catch (e) {
+      ElMessage.error((e as Error).message || '删除失败')
+    }
   }
 }
 
@@ -579,6 +672,17 @@ onMounted(async () => {
                   >
                     <el-icon :size="13"><Download /></el-icon>下载结果
                   </button>
+                  <!-- 产出回灌为源图：多轮超分/修复不必「下载 → 重命名 → 再上传」绕一圈磁盘 -->
+                  <button
+                    v-if="previewHasResult"
+                    type="button"
+                    class="wb-tool-btn"
+                    :disabled="adopting"
+                    title="把这次产出设为新的源图像，可换个倍率或模型继续处理"
+                    @click="useResultAsSource"
+                  >
+                    <el-icon :size="13"><RefreshRight /></el-icon>{{ adopting ? '读取中…' : '作为原图继续处理' }}
+                  </button>
                   <StatusText
                     :status="previewTask.status"
                     :degraded="!!previewTask.resolved?.degraded && previewTask.status === 'completed'"
@@ -664,6 +768,8 @@ onMounted(async () => {
           <p class="wb-ready-hint">
             {{ autoMode ? '当前为自动模式：tile、精度与加速方式由系统按本机实测结果决定，实际生效值可在任务详情中核对。' : '当前为手动模式：你设置的参数将被直接使用；若资源不足，系统会自动降低参数并在任务详情中说明。' }}
           </p>
+          <!-- 源图保留后可重跑，因此「有任务在跑」这个门会常被碰到：说清为什么按不动、什么时候能按 -->
+          <p v-if="queueBusy" class="wb-ready-hint is-wait">当前有任务正在处理，完成后即可提交下一次。</p>
         </SectionCard>
       </section>
 
@@ -777,7 +883,7 @@ onMounted(async () => {
       @cancel="(id: string) => onTaskAction({ key: 'cancel', id })"
       @retry="(id: string) => onTaskAction({ key: 'retry', id })"
       @download="(id: string) => onTaskAction({ key: 'download', id })"
-      @remove="() => ElMessage.info(UNAVAILABLE_COPY.removeTask)"
+      @remove="(id: string) => onTaskAction({ key: 'remove', id })"
     />
   </div>
 </template>
@@ -1296,6 +1402,17 @@ onMounted(async () => {
   color: var(--Theme-text-primary);
 }
 
+/* 「作为原图继续处理」读取往返期间（取字节 + 上传）不可再点，避免连点生成多份副本 */
+.wb-tool-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.wb-tool-btn:disabled:hover {
+  background: transparent;
+  color: var(--Theme-text-secondary);
+}
+
 .wb-tool-btn:focus-visible {
   outline: 2px solid var(--Theme-primary);
   outline-offset: 1px;
@@ -1468,6 +1585,11 @@ onMounted(async () => {
   font-size: var(--font-size-12);
   line-height: 16px;
   color: var(--Theme-text-tertiary);
+}
+
+/* 提交被"已有任务在跑"挡住时的说明（不是错误，是等待 —— 故用提示色不用错误色） */
+.wb-ready-hint.is-wait {
+  color: var(--Theme-warning);
 }
 
 /* ---------- 最近任务 ---------- */

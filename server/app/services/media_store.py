@@ -37,24 +37,39 @@ ID_PREFIX = "file_"
 TASK_ID_PREFIX = "tsk_"
 
 
-def uploads_dir() -> Path:
+def uploads_dir(*, create: bool = True) -> Path:
     # 走 settings_store 的生效值：F-07 改数据根后，后续上传立即写入新根（不迁移既有文件）
+    #
+    # `create=False`：任务清理（`services/task_cleanup.py`）需要**只求路径不建目录** ——
+    # 否则"删掉最后一份上传"这个动作会顺手把空目录又建回来，收尾后目录状态自相矛盾。
     d = settings_store.effective_data_root() / "uploads"
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def thumbs_dir() -> Path:
+def thumbs_dir(*, create: bool = True) -> Path:
     d = settings_store.effective_data_root() / "thumbs"
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def outputs_dir() -> Path:
+def outputs_dir(*, create: bool = True) -> Path:
     """任务产物根（`data/outputs/`）。T-806 起真实推理结果落在这里。"""
     d = settings_store.effective_data_root() / "outputs"
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def task_outputs_path(task_id: int) -> Path:
+    """单个任务的产物目录路径（`data/outputs/tsk_<id>/`）—— **不创建**。
+
+    目录布局的唯一来源仍是本模块（`task_outputs_dir` 复用它），
+    清理侧只是拿路径去删，不该因为这个动作把目录先建出来。
+    """
+    return outputs_dir(create=False) / f"{TASK_ID_PREFIX}{task_id}"
 
 
 def task_outputs_dir(task_id: int) -> Path:
@@ -63,7 +78,7 @@ def task_outputs_dir(task_id: int) -> Path:
     目录名沿用任务的**对外 id 前缀**（`tsk_`，见 `tasks/manager.py`），
     这样磁盘目录与 API 里看到的 `tsk_12` 是同一个标识，排查时不用来回换算。
     """
-    d = outputs_dir() / f"{TASK_ID_PREFIX}{task_id}"
+    d = task_outputs_path(task_id)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -72,20 +87,31 @@ def _new_file_id() -> str:
     return f"{ID_PREFIX}{uuid.uuid4().hex[:12]}"
 
 
-def find_upload(file_id: str) -> Path | None:
+def find_upload(file_id: str, *, create: bool = True) -> Path | None:
     """file_id → 原图路径（目录扫描；id 形态非法直接 None，天然防目录逃逸）。
-    只匹配图片扩展名，排除同名 `.json` 旁车元信息文件。"""
+    只匹配图片扩展名，排除同名 `.json` 旁车元信息文件。
+
+    `create=False` 供清理侧使用（只查不建，见 `uploads_dir` 的说明）。
+    """
     if not file_id.startswith(ID_PREFIX) or not file_id[len(ID_PREFIX):].isalnum():
         return None
     for ext in _EXT_TO_FORMAT:
-        p = uploads_dir() / f"{file_id}{ext}"
+        p = uploads_dir(create=create) / f"{file_id}{ext}"
         if p.is_file():
             return p
     return None
 
 
-def thumb_path(file_id: str) -> Path:
-    return thumbs_dir() / f"{file_id}.jpg"
+def thumb_path(file_id: str, *, create: bool = True) -> Path:
+    return thumbs_dir(create=create) / f"{file_id}.jpg"
+
+
+def upload_meta_path(file_id: str, *, create: bool = True) -> Path:
+    """上传旁车元信息路径（`uploads/<file_id>.json`）—— 写入 / 读取 / **清理** 共用的唯一来源。
+
+    此前三处各自拼 `f"{file_id}.json"`，清理侧一旦少写一处就会留下无法认领的残留。
+    """
+    return uploads_dir(create=create) / f"{file_id}.json"
 
 
 def verify_and_open(data: bytes, filename: str) -> tuple[Image.Image, str]:
@@ -163,7 +189,7 @@ def save_upload(data: bytes, filename: str) -> dict:
         "real_format": real,
     }
     # 旁车元信息：上传不落库（T-605 决策），任务中心凭 file_id 反查文件名/尺寸
-    (uploads_dir() / f"{file_id}.json").write_text(
+    upload_meta_path(file_id, create=True).write_text(
         json.dumps(meta, ensure_ascii=False), encoding="utf-8"
     )
     return meta
@@ -173,7 +199,7 @@ def read_meta(file_id: str) -> dict | None:
     """上传旁车元信息（文件名 / 尺寸 / 真实格式）；不存在或损坏返回 None。"""
     if not file_id.startswith(ID_PREFIX) or not file_id[len(ID_PREFIX):].isalnum():
         return None
-    p = uploads_dir() / f"{file_id}.json"
+    p = upload_meta_path(file_id, create=False)
     if not p.is_file():
         return None
     try:

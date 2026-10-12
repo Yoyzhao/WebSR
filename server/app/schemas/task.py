@@ -80,3 +80,30 @@ class LogEntryOut(BaseModel):
     timestamp: str
     message: str
     code: str | None = None
+
+
+class TaskDeleteOut(BaseModel):
+    """单任务删除结果（api-contract v1.1 §4.1）。
+
+    如实回报"删掉了什么"：产出文件数与被释放的字节数 —— 删除是不可逆操作，
+    界面需要能给出"已删除任务与 3 个文件（12.4 MB）"这样的确定性反馈，
+    而不是一句"删除成功"。
+    """
+
+    id: str
+    deleted_files: int
+    freed_bytes: int
+
+
+class TaskClearOut(BaseModel):
+    """批量清理终态任务的结果（api-contract v1.1 §4.1）。
+
+    `by_status` 按状态分类计数：界面在二次确认里**先按类列出将要删除的条数**
+    （定稿 `04 §5`：清空已完成 = 二次确认 + 显示数量），执行后再用这里的真实
+    计数回报 —— 两者分开，避免把"预估"说成"结果"。
+    """
+
+    cleared: int
+    by_status: dict[str, int]
+    deleted_files: int
+    freed_bytes: int

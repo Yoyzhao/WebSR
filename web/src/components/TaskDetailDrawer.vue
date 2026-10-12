@@ -74,13 +74,15 @@ const actions = computed<ActionItem[]>(() => {
     disabled: !v.hasOutput,
     disabledReason: '暂无产出文件',
   })
-  // 删除：契约 v1.0 无 DELETE /api/tasks/{id} —— 入口禁用并写明原因
+  // 删除：契约 v1.1 起可用（`DELETE /api/tasks/{id}`）。
+  // ⚠️ 只对**终态任务**开放 —— 运行 / 排队 / 取消中的任务服务端会 409 拒绝
+  //    （删除不是绕过"取消"的后门），故按钮在运行期置灰并说明原因。
   list.push({
     key: 'remove',
     label: '删除任务',
     type: 'danger',
-    disabled: true,
-    disabledReason: UNAVAILABLE_COPY.removeTask,
+    disabled: v.isRunning,
+    disabledReason: '任务执行中不能删除，请先取消',
   })
   return list
 })

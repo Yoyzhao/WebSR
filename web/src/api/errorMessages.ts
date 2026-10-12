@@ -1,7 +1,7 @@
 /**
  * 错误码 → 界面文案对照表。
  *
- * 对应 `docs/tech/api-contract.md` **v1.0 §2.3** 的 **20 个错误码**，以及其 §7
+ * 对应 `docs/tech/api-contract.md` **v1.1 §2.3** 的 **21 个错误码**，以及其 §7
  * 冻结点第 3 项（"错误码全量清单 + 每种错误的界面文案对照表"，T-700 定稿 16 → 20）。
  *
  * 约定（PRD §5）：界面上只展示 message 与 suggestion；
@@ -55,6 +55,7 @@ export const ERROR_MESSAGES: Record<string, ErrorCopy> = {
   TASK_NOT_FOUND: { message: '任务不存在或已被清理', suggestion: '刷新任务列表获取最新状态' },
   TASK_CANCELED: { message: '该任务已结束，无法取消', suggestion: '无需操作，列表状态已刷新' },
   TASK_ALREADY_RUNNING: { message: '已有任务正在执行', suggestion: '当前并发度为 1，请等待其完成后再提交' },
+  TASK_NOT_TERMINAL: { message: '任务还在进行中，暂时不能删除', suggestion: '请先取消该任务，等它结束后再删除' },
   METHOD_NOT_ALLOWED: { message: '该地址不支持此请求方法', suggestion: '请检查请求方法后重试' },
   EP_FALLBACK_DETECTED: {
     message: '加速方式未生效，已回退到 CPU',

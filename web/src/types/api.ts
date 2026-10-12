@@ -351,6 +351,31 @@ export interface Capabilities {
   }
 }
 
+/**
+ * 单任务删除结果（api-contract v1.1 §4.1）。
+ *
+ * 不可逆操作必须给出**确定性反馈**：界面要能说清"删掉了几个文件、释放了多少空间"，
+ * 而不是一句"删除成功"。
+ */
+export interface TaskDeleteResult {
+  id: string
+  deleted_files: number
+  freed_bytes: number
+}
+
+/**
+ * 批量清理终态任务的结果（api-contract v1.1 §4.1）。
+ *
+ * `by_status` 按状态分类计数：二次确认里先列出"将要删除的数量"，
+ * 执行后再用这里的真实计数回报 —— 预估与结果分开，不混为一谈。
+ */
+export interface TaskClearResult {
+  cleared: number
+  by_status: Record<string, number>
+  deleted_files: number
+  freed_bytes: number
+}
+
 export interface Setting {
   key: string
   value: string

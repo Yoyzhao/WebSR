@@ -6,7 +6,7 @@
  *    请求失败时**只**上抛统一错误体，绝不回退到样例数据 —— 否则"真实与模拟混用"
  *    会让排障时看到的每一个结论都不可信。
  *
- * 契约依据：`docs/tech/api-contract.md` **v1.0（已冻结）**。
+ * 契约依据：`docs/tech/api-contract.md` **v1.1（已冻结）**。
  * 接口路径一律相对 `/api`（开发期由 Vite `server.proxy` 转发到 127.0.0.1:8000）。
  */
 import { describeError } from './errorMessages'
@@ -19,6 +19,8 @@ import type {
   Model,
   Setting,
   Task,
+  TaskClearResult,
+  TaskDeleteResult,
   TaskParams,
 } from '@/types/api'
 
@@ -164,6 +166,26 @@ export async function fetchLogs(taskId: string): Promise<LogEntry[]> {
   return request<LogEntry[]>(`/tasks/${encodeURIComponent(taskId)}/logs`)
 }
 
+/**
+ * 删除单个**终态**任务（含其产出文件）—— 契约 v1.1 §4.1。
+ *
+ * 非终态（运行 / 排队 / 取消中）会返回 `409 TASK_NOT_TERMINAL`：删除不是绕过取消的后门。
+ */
+export async function deleteTask(taskId: string): Promise<TaskDeleteResult> {
+  return request<TaskDeleteResult>(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' })
+}
+
+/**
+ * 清理**全部终态任务**（含其产出文件）—— 契约 v1.1 §4.1。
+ *
+ * 界面用词沿用 5A 定稿的「清理已完成」；实际范围是所有已结束的任务
+ * （已完成 / 已取消 / 失败 / 已中断），响应里的 `by_status` 给出分类计数。
+ * 运行中的任务永不清理。
+ */
+export async function clearFinishedTasks(): Promise<TaskClearResult> {
+  return request<TaskClearResult>('/tasks/clear-finished', { method: 'POST' })
+}
+
 // ---------------------------------------------------------------------------
 // 文件（api-contract §4.2）
 // ---------------------------------------------------------------------------
@@ -178,6 +200,19 @@ export async function uploadFile(file: File): Promise<import('@/types/api').Uplo
 export async function downloadFile(fileId: string, variant: FileVariant, filename: string): Promise<void> {
   const blob = await requestBlob(`/files/${encodeURIComponent(fileId)}/content?variant=${variant}`)
   triggerDownload(blob, filename)
+}
+
+/**
+ * 取文件内容的二进制（`original` / `thumb` / `result`）。
+ *
+ * 与 `fileContentUrl` 的区别：那个是给 `<img src>` 直接引用的 URL，本函数走
+ * `fetch` 拿字节 —— 「把产出作为新的源图继续处理」需要**先拿到字节再重新上传**：
+ * 产出落在 `data/outputs/`，而任务只接受 `data/uploads/` 里的 `file_id`，
+ * 故必须在浏览器侧走一次「下载 → 转 File → 上传」，复用同一条已校验的上传链路
+ * （不新增接口，避免为一次秒级的本地回环搬动契约）。
+ */
+export async function fetchFileBlob(fileId: string, variant: FileVariant): Promise<Blob> {
+  return requestBlob(`/files/${encodeURIComponent(fileId)}/content?variant=${variant}`)
 }
 
 export function triggerDownload(blob: Blob, filename: string): void {

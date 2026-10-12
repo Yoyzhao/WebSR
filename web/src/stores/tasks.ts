@@ -9,9 +9,9 @@
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { cancelTask, createTask, fetchTask, fetchTasks } from '@/api/client'
+import { cancelTask, clearFinishedTasks, createTask, deleteTask, fetchTask, fetchTasks } from '@/api/client'
 import { subscribeTaskProgress } from '@/api/sse'
-import type { SseProgressEvent, Task, TaskParams } from '@/types/api'
+import type { SseProgressEvent, Task, TaskClearResult, TaskDeleteResult, TaskParams } from '@/types/api'
 
 export const useTaskStore = defineStore('tasks', () => {
   const tasks = ref<Task[]>([])
@@ -28,6 +28,14 @@ export const useTaskStore = defineStore('tasks', () => {
   const runningTasks = computed(() =>
     tasks.value.filter((t) => t.status === 'running' || t.status === 'queued' || t.status === 'canceling'),
   )
+
+  /**
+   * 已结束（终态）的任务 —— 可删除 / 可清理的那一批。
+   *
+   * 界面的"清理已完成"要在二次确认里**先列出数量**（定稿 `04 §5`），
+   * 计数口径必须与服务端的删除判据同源，故收敛到这里一处。
+   */
+  const finishedTasks = computed(() => tasks.value.filter((t) => TERMINAL.has(t.status)))
 
   const latestTask = computed(() => tasks.value[0] ?? null)
 
@@ -153,16 +161,56 @@ export const useTaskStore = defineStore('tasks', () => {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // 删除 / 清理（契约 v1.1 §4.1，CHG-20261011-08）
+  //
+  // 服务端才是真相；这里同步本地列表只是**立即反映**，避免等下一次整表刷新。
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 删除单个终态任务（含产出文件）。
+   *
+   * ⚠️ 必须同时从 `sessionTaskIds` 摘除：工作台预览跟随这个集合
+   * （见文件头 `previewTask` 说明），不摘的话预览会指向一个已经不存在的任务，
+   * 表现为空占位图而非空态。
+   */
+  async function remove(id: string): Promise<TaskDeleteResult> {
+    const res = await deleteTask(id)
+    tasks.value = tasks.value.filter((t) => t.id !== id)
+    subscriptions.get(id)?.()
+    subscriptions.delete(id)
+    sessionTaskIds.value.delete(id)
+    return res
+  }
+
+  /**
+   * 清理**全部终态任务**（含产出文件）。返回服务端的真实计数（按状态分类）。
+   *
+   * 只摘终态：运行 / 排队 / 取消中的任务服务端从不清理，本地也不该动。
+   */
+  async function clearFinished(): Promise<TaskClearResult> {
+    const res = await clearFinishedTasks()
+    tasks.value = tasks.value.filter((t) => !TERMINAL.has(t.status))
+    // 终态任务的订阅早已在 `onDone` 收口；这里只为清理可能残留的会话跟踪项
+    for (const id of [...sessionTaskIds.value]) {
+      if (!tasks.value.some((t) => t.id === id)) sessionTaskIds.value.delete(id)
+    }
+    return res
+  }
+
   return {
     tasks,
     loading,
     activeTaskId,
     runningTasks,
+    finishedTasks,
     latestTask,
     previewTask,
     load,
     submit,
     cancel,
+    remove,
+    clearFinished,
     refresh,
     patch,
     unsubscribeAll,

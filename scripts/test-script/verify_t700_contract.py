@@ -4,7 +4,7 @@
 三处事实源：`docs/tech/api-contract.md` ／ `web/src/types/api.ts` ／ `docs/tech/api/openapi.json`。
 
 断言：
-1. 错误码：契约 §2.3 表 == `errorMessages.ts` 的 key 集合（20 条）
+1. 错误码：契约 §2.3 表 == `errorMessages.ts` 的 key 集合（21 条）
 2. 状态取值：后端 `TASK_STATUSES` == 前端 `constants.ts::TASK_STATUS` == 契约 §3.1 表
 3. 端点：契约 §4 中标 ✅ 的路径**必须在** openapi.json；标 ⬜ 的**必须不在**
 4. 字段：后端 schema（openapi）字段 ⊆ 前端 TS 接口字段（前端可有额外派生字段）
@@ -78,11 +78,12 @@ contract_codes = set(re.findall(r"^\|\s*\d+\s*\|\s*`([A-Z_]+)`", sec_23, re.M))
 err_obj = err_ts.split("ERROR_MESSAGES", 1)[1]
 err_codes = set(re.findall(r"^\s{2}([A-Z_][A-Z0-9_]*):", err_obj, re.M))
 
-check("契约 §2.3 解析到 20 条错误码", len(contract_codes) == 20, f"actual={len(contract_codes)}")
-check("errorMessages.ts 解析到 20 条", len(err_codes) == 20, f"actual={len(err_codes)}")
+check("契约 §2.3 解析到 21 条错误码", len(contract_codes) == 21, f"actual={len(contract_codes)}")
+check("errorMessages.ts 解析到 21 条", len(err_codes) == 21, f"actual={len(err_codes)}")
 check("两侧集合完全一致", contract_codes == err_codes,
       f"仅契约有={sorted(contract_codes - err_codes)} 仅前端有={sorted(err_codes - contract_codes)}")
-for must in ("NOT_FOUND", "METHOD_NOT_ALLOWED", "MODEL_NOT_CONVERTIBLE", "CONVERT_ENV_MISSING"):
+for must in ("NOT_FOUND", "METHOD_NOT_ALLOWED", "MODEL_NOT_CONVERTIBLE", "CONVERT_ENV_MISSING",
+             "TASK_NOT_TERMINAL"):
     check(f"新码 {must} 已入册", must in contract_codes and must in err_codes)
 
 # ---------------------------------------------------------------------------
@@ -144,6 +145,8 @@ check("契约标记 ⬜ 的端点**不在** openapi 中（S2 未实现）", not 
 check("openapi 无契约未登记的端点", openapi_paths <= (impl_paths | plan_paths),
       f"契约未登记={sorted(openapi_paths - impl_paths - plan_paths)}")
 check("日志端点已实现", norm_path("/api/tasks/{task_id}/logs") in openapi_paths)
+check("删除端点已实现（v1.1）", norm_path("/api/tasks/{task_id}") in openapi_paths)
+check("批量清理端点已实现（v1.1）", norm_path("/api/tasks/clear-finished") in openapi_paths)
 
 # ---------------------------------------------------------------------------
 # 4. 字段：后端 schema（openapi）⊆ 前端 TS 接口
@@ -208,7 +211,8 @@ rows = re.findall(r"^\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|", sec_7, re.M)
 check("§7 解析到 8 行冻结点", len(rows) == 8, f"actual={len(rows)}")
 not_closed = [n for n, _name, st in rows if "✅" not in st]
 check("8 项全部 ✅", not not_closed, f"未闭合#{not_closed}")
-check("契约标注 v1.0 已冻结", "**v1.0 · 已冻结**" in contract)
+check("契约标注已冻结（v1.x 形态，不钉死小版本号）",
+      re.search(r"\*\*v1\.\d+(\.\d+)? · 已冻结\*\*", contract) is not None)
 
 print(f"\n===== 结果：{PASS} 通过 / {FAIL} 失败 =====")
 sys.exit(1 if FAIL else 0)

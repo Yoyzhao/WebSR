@@ -593,6 +593,47 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Delete Task",
+        "description": "删除单个终态任务（含其产出文件）。\n\n非终态 → `409 TASK_NOT_TERMINAL`（先取消）；不存在 → `TASK_NOT_FOUND`。",
+        "operationId": "delete_task_api_tasks__task_id__delete",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDeleteOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/tasks/{task_id}/cancel": {
@@ -723,6 +764,28 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/clear-finished": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Clear Finished Tasks",
+        "description": "清理全部终态任务（含其产出文件）。返回按状态分类的真实计数。",
+        "operationId": "clear_finished_tasks_api_tasks_clear_finished_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskClearOut"
                 }
               }
             }
@@ -1531,6 +1594,62 @@
           "items"
         ],
         "title": "SettingsUpdate"
+      },
+      "TaskClearOut": {
+        "properties": {
+          "cleared": {
+            "type": "integer",
+            "title": "Cleared"
+          },
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Status"
+          },
+          "deleted_files": {
+            "type": "integer",
+            "title": "Deleted Files"
+          },
+          "freed_bytes": {
+            "type": "integer",
+            "title": "Freed Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cleared",
+          "by_status",
+          "deleted_files",
+          "freed_bytes"
+        ],
+        "title": "TaskClearOut",
+        "description": "批量清理终态任务的结果（api-contract v1.1 §4.1）。\n\n`by_status` 按状态分类计数：界面在二次确认里**先按类列出将要删除的条数**\n（定稿 `04 §5`：清空已完成 = 二次确认 + 显示数量），执行后再用这里的真实\n计数回报 —— 两者分开，避免把\"预估\"说成\"结果\"。"
+      },
+      "TaskDeleteOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "deleted_files": {
+            "type": "integer",
+            "title": "Deleted Files"
+          },
+          "freed_bytes": {
+            "type": "integer",
+            "title": "Freed Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "deleted_files",
+          "freed_bytes"
+        ],
+        "title": "TaskDeleteOut",
+        "description": "单任务删除结果（api-contract v1.1 §4.1）。\n\n如实回报\"删掉了什么\"：产出文件数与被释放的字节数 —— 删除是不可逆操作，\n界面需要能给出\"已删除任务与 3 个文件（12.4 MB）\"这样的确定性反馈，\n而不是一句\"删除成功\"。"
       },
       "TaskOut": {
         "properties": {

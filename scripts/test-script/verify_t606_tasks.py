@@ -184,5 +184,146 @@ with TestClient(app) as client:
     # 占位执行器**不产出图像**，故产物为空；真实产物链路由 verify_t806_loader.py 覆盖
     check("产物端点可用（占位执行器不产生产物，故为空）", r.status_code == 200 and r.json() == [])
 
+    print("== 7. 删除 / 清理（契约 v1.1：DELETE /api/tasks/{id} + POST /api/tasks/clear-finished）==")
+
+    # 占位执行器**不写产物**，而清理的主要职责正是"连带删产物文件" ——
+    # 这里按产物的落盘约定（`outputs/tsk_<id>/`）手工放置文件与记录行。
+    # 夹具是"构造出清理要面对的真实状态"，不是把缺陷写进断言。
+    def seed_output(task_raw_id: str) -> Path:
+        from app.db import get_session
+        from app.models.entities import Artifact, Task
+
+        numeric = int(task_raw_id.removeprefix("tsk_"))
+        out_dir = DATA / "outputs" / f"tsk_{numeric}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        f = out_dir / "a_4x.png"
+        f.write_bytes(make_png())
+        s = get_session()
+        try:
+            s.add(Artifact(
+                task_id=numeric, kind="output", path=f"outputs/tsk_{numeric}/a_4x.png",
+                sha256=None, size_bytes=f.stat().st_size,
+            ))
+            s.commit()
+        finally:
+            s.close()
+        return f
+
+    # ⚠️ 本节必须用**独立的第二张原图**：第 1~6 节的任务全都引用同一张原图，
+    #    若本节继续复用，引用计数永远命中它们，"最后一份引用者"这个场景根本构造不出来
+    #    （首版就踩了这个坑——测试预期错，代码是对的）。
+    r = client.post("/api/files/upload", files={"file": ("b.png", io.BytesIO(make_png()), "image/png")})
+    file2 = r.json()["file_id"]
+    up_path = next(iter((DATA / "uploads").glob(f"{file2}.*")))
+    thumb = DATA / "thumbs" / f"{file2}.jpg"
+    # 第一张原图（第 1~6 节在用）——用来验证"别人的数据不被波及"
+    up_path_1 = next(iter((DATA / "uploads").glob(f"{file_id}.*")))
+
+    # 两条任务**共用同一张原图**（同一 file_id 多次提交是常规用法，尤其"产出回灌"迭代）
+    r = client.post("/api/tasks", json={"type": "upscale", "file_id": file2, "params": params})
+    shared_a = r.json()["id"]
+    wait_status(client, shared_a, ("completed",))
+    f_a = seed_output(shared_a)
+    r = client.post("/api/tasks", json={"type": "upscale", "file_id": file2, "params": params})
+    shared_b = r.json()["id"]
+    wait_status(client, shared_b, ("completed",))
+    f_b = seed_output(shared_b)
+
+    check("夹具就绪：原图 + 缩略图 + 两份产物文件",
+          up_path.is_file() and thumb.is_file() and f_a.is_file() and f_b.is_file())
+
+    # ---- 7.1 运行中不可删（删除不得成为绕过取消的后门）----
+    r = client.post("/api/tasks", json={"type": "upscale", "file_id": file2, "params": params})
+    running = r.json()["id"]
+    d = client.delete(f"/api/tasks/{running}")
+    check("运行/排队中删除 → 409 TASK_NOT_TERMINAL",
+          d.status_code == 409 and d.json()["error"]["code"] == "TASK_NOT_TERMINAL",
+          f"{d.status_code} {d.text[:160]}")
+    check("被拒后任务仍完好（未被误删）", client.get(f"/api/tasks/{running}").status_code == 200)
+    wait_status(client, running, ("completed",))
+
+    d = client.delete("/api/tasks/tsk_99999")
+    check("删除不存在的任务 → 404 TASK_NOT_FOUND",
+          d.status_code == 404 and d.json()["error"]["code"] == "TASK_NOT_FOUND")
+    d = client.delete("/api/tasks/not-an-id")
+    check("非法 id → 404（不 500）", d.status_code == 404)
+
+    # ---- 7.2 删一条：文件连带删，但**共享的原图必须留着** ----
+    d = client.delete(f"/api/tasks/{shared_a}")
+    body = d.json()
+    check("删除终态任务 → 200", d.status_code == 200, d.text[:160])
+    check("如实回报删除的文件数与字节数",
+          body["deleted_files"] >= 1 and body["freed_bytes"] > 0, str(body))
+    check("该任务的产物目录随之删除", not f_a.exists())
+    check("记录已消失（详情 404）", client.get(f"/api/tasks/{shared_a}").status_code == 404)
+    check("⚠️ 原图仍被另一任务引用 → **不删**", up_path.is_file())
+    check("缩略图同理保留", thumb.is_file())
+    check("另一任务的产出仍可取（result 端点未受影响）",
+          client.get(f"/api/files/{file2}/content", params={"variant": "result"}).status_code == 200)
+
+    # ---- 7.3 仍有第三个引用者（7.1 那条）→ 继续保留 ----
+    d = client.delete(f"/api/tasks/{shared_b}")
+    check("删除第二个引用者 → 200", d.status_code == 200, d.text[:160])
+    check("该任务的产物文件已删", not f_b.exists())
+    check("⚠️ 还有第三条任务引用该原图 → 仍不删", up_path.is_file())
+    check("缩略图同理保留", thumb.is_file())
+
+    # ---- 7.4 删掉**最后一个**引用者：原图/缩略图/旁车元信息一并清理 ----
+    d = client.delete(f"/api/tasks/{running}")
+    check("删除最后一个引用者 → 200", d.status_code == 200, d.text[:160])
+    check("原图已清理", not up_path.exists())
+    check("缩略图已清理", not thumb.exists())
+    check("旁车元信息已清理", not up_path.with_suffix(".json").exists())
+    check("原图端点 → 404（已确属无引用）",
+          client.get(f"/api/files/{file2}/content", params={"variant": "original"}).status_code == 404)
+    check("result 端点 → 404",
+          client.get(f"/api/files/{file2}/content", params={"variant": "result"}).status_code == 404)
+    # 别人的数据不受波及：第 1~6 节那张原图仍被它们的任务引用 → 必须原样在
+    check("⚠️ 其它任务的原图未被波及", up_path_1.is_file())
+
+    # ---- 7.4b 原图已缺失、旁车仍在 → 旁车同样要清理（删除动作不该有耦合）----
+    # 实测来源：真实环境清理时发现"旁车的删除被挂在'原图存在'的分支里"，
+    # 原图一旦缺失（历史残留 / 手工清过），`.json` 就成了永远没人认领的残留。
+    r = client.post("/api/files/upload", files={"file": ("c.png", io.BytesIO(make_png()), "image/png")})
+    file3 = r.json()["file_id"]
+    r = client.post("/api/tasks", json={"type": "upscale", "file_id": file3, "params": params})
+    orphan = r.json()["id"]
+    wait_status(client, orphan, ("completed",))
+    up3 = next(iter((DATA / "uploads").glob(f"{file3}.*")))
+    side3 = DATA / "uploads" / f"{file3}.json"
+    check("夹具：旁车元信息存在", side3.is_file())
+    up3.unlink()  # 模拟"原图已缺失"
+    d = client.delete(f"/api/tasks/{orphan}")
+    check("原图缺失时仍删掉旁车（不因 A 不在就跳过 B）",
+          d.status_code == 200 and not side3.exists(),
+          f"{d.status_code} sidecar_exists={side3.exists()}")
+
+    # ---- 7.5 批量清理终态任务 ----
+    before = client.get("/api/tasks").json()
+    terminal_before = [t for t in before
+                       if t["status"] in ("completed", "canceled", "failed", "interrupted")]
+    r = client.post("/api/tasks/clear-finished")
+    body = r.json()
+    check("清理端点 200", r.status_code == 200, r.text[:160])
+    check("清理条数 == 清理前的终态条数",
+          body["cleared"] == len(terminal_before) and body["cleared"] >= 3,
+          f"cleared={body['cleared']} terminal_before={len(terminal_before)}")
+    check("按状态分类回报且合计一致",
+          set(body["by_status"]) <= {"completed", "canceled", "failed", "interrupted"}
+          and sum(body["by_status"].values()) == body["cleared"], str(body["by_status"]))
+    check("清理后不再有终态任务",
+          all(t["status"] not in ("completed", "canceled", "failed", "interrupted")
+              for t in client.get("/api/tasks").json()))
+    check("删除的文件数/字节数如实回报", body["deleted_files"] >= 1, str(body))
+
+    # ---- 7.6 模型资产不受波及（PRD §315：不得删除模型库中的模型文件）----
+    models = client.get("/api/models").json()
+    check("模型仍在库中", any(m["id"] == mid for m in models))
+    check("模型文件仍在磁盘", len(list((DATA / "models").rglob("*.onnx"))) >= 1)
+
+    again = client.post("/api/tasks/clear-finished").json()
+    check("无终态任务时可重复调用（cleared=0，不报错）",
+          again["cleared"] == 0 and again["deleted_files"] == 0, str(again))
+
 print(f"\n===== 结果：{PASS} 通过 / {FAIL} 失败 =====")
 sys.exit(1 if FAIL else 0)
